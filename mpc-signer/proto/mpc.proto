@@ -1,0 +1,187 @@
+syntax = "proto3";
+
+package mpc;
+
+option go_package = "github.com/collider/mpc-signer/proto";
+
+// MPCSigner service provides MPC operations for the bank signer node.
+// This node holds the bank's share and participates in DKG and signing protocols.
+service MPCSigner {
+  // Health check
+  rpc Health(HealthRequest) returns (HealthResponse);
+  
+  // ==================== DKG ====================
+  // Start a new DKG session
+  rpc StartDKG(StartDKGRequest) returns (StartDKGResponse);
+  
+  // Process a DKG protocol round
+  rpc DKGRound(DKGRoundRequest) returns (DKGRoundResponse);
+  
+  // Finalize DKG (optional, usually auto-finalizes)
+  rpc FinalizeDKG(FinalizeDKGRequest) returns (FinalizeDKGResponse);
+  
+  // ==================== Signing ====================
+  // Start a new signing session
+  rpc StartSigning(StartSigningRequest) returns (StartSigningResponse);
+  
+  // Process a signing protocol round
+  rpc SigningRound(SigningRoundRequest) returns (SigningRoundResponse);
+  
+  // Finalize signing (optional)
+  rpc FinalizeSigning(FinalizeSigningRequest) returns (FinalizeSigningResponse);
+  
+  // ==================== Keyset Management ====================
+  // Get information about a stored keyset
+  rpc GetKeysetInfo(GetKeysetInfoRequest) returns (GetKeysetInfoResponse);
+  
+  // Delete a keyset (for key rotation)
+  rpc DeleteKeyset(DeleteKeysetRequest) returns (DeleteKeysetResponse);
+}
+
+// ==================== Health ====================
+message HealthRequest {}
+
+message HealthResponse {
+  bool healthy = 1;
+  string version = 2;
+  int32 active_sessions = 3;
+  int32 stored_keysets = 4;
+}
+
+// ==================== DKG Messages ====================
+message StartDKGRequest {
+  string session_id = 1;
+  string wallet_id = 2;
+  int32 threshold = 3;      // t in (t, n) threshold scheme
+  int32 total_parties = 4;  // n in (t, n) threshold scheme
+  int32 party_index = 5;    // This party's index (0 = bank, 1 = user)
+}
+
+message StartDKGResponse {
+  bool success = 1;
+  string error = 2;
+  bytes round1_msg = 3;  // First round message to send to other parties
+}
+
+message DKGRoundRequest {
+  string session_id = 1;
+  int32 round = 2;
+  repeated PartyMessage incoming_messages = 3;
+}
+
+// Message from another party
+message PartyMessage {
+  int32 from_party = 1;
+  bytes payload = 2;
+}
+
+message DKGRoundResponse {
+  bool success = 1;
+  string error = 2;
+  bool is_final = 3;        // True if DKG is complete
+  bytes outgoing_msg = 4;   // Message to send to other parties (if not final)
+  DKGResult result = 5;     // Result (only if is_final = true)
+}
+
+// Result of successful DKG
+message DKGResult {
+  string keyset_id = 1;
+  bytes public_key = 2;        // Compressed (33 bytes)
+  bytes public_key_full = 3;   // Uncompressed (65 bytes)
+  string ethereum_address = 4;
+}
+
+message FinalizeDKGRequest {
+  string session_id = 1;
+}
+
+message FinalizeDKGResponse {
+  bool success = 1;
+  string error = 2;
+  DKGResult result = 3;
+}
+
+// ==================== Signing Messages ====================
+
+// Permit that authorizes a signing operation
+// Must be validated by the bank signer before participating
+message SigningPermit {
+  string tx_request_id = 1;       // Reference to Core API TxRequest
+  string wallet_id = 2;
+  string keyset_id = 3;
+  bytes tx_hash = 4;              // Hash of the transaction to sign
+  int64 expires_at = 5;           // Unix timestamp
+  bytes coordinator_signature = 6; // HMAC signature from Core API
+}
+
+message StartSigningRequest {
+  string session_id = 1;
+  string keyset_id = 2;
+  bytes message_hash = 3;   // 32-byte hash to sign
+  SigningPermit permit = 4; // Authorization from Core API
+  int32 party_index = 5;    // This party's index
+}
+
+message StartSigningResponse {
+  bool success = 1;
+  string error = 2;
+  bytes round1_msg = 3;
+}
+
+message SigningRoundRequest {
+  string session_id = 1;
+  int32 round = 2;
+  repeated PartyMessage incoming_messages = 3;
+}
+
+message SigningRoundResponse {
+  bool success = 1;
+  string error = 2;
+  bool is_final = 3;
+  bytes outgoing_msg = 4;
+  SigningResult result = 5;
+}
+
+// Result of successful signing
+message SigningResult {
+  bytes signature_r = 1;     // 32 bytes
+  bytes signature_s = 2;     // 32 bytes
+  int32 signature_v = 3;     // Recovery ID (27 or 28 for Ethereum)
+  bytes full_signature = 4;  // 65 bytes (r || s || v)
+}
+
+message FinalizeSigningRequest {
+  string session_id = 1;
+}
+
+message FinalizeSigningResponse {
+  bool success = 1;
+  string error = 2;
+  SigningResult result = 3;
+}
+
+// ==================== Keyset Management ====================
+
+message GetKeysetInfoRequest {
+  string keyset_id = 1;
+}
+
+message GetKeysetInfoResponse {
+  bool exists = 1;
+  string keyset_id = 2;
+  string wallet_id = 3;
+  bytes public_key = 4;
+  string ethereum_address = 5;
+  int64 created_at = 6;
+  int64 last_used_at = 7;
+}
+
+message DeleteKeysetRequest {
+  string keyset_id = 1;
+  string reason = 2;  // For audit logging
+}
+
+message DeleteKeysetResponse {
+  bool success = 1;
+  string error = 2;
+}

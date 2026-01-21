@@ -1,0 +1,92 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: collider-postgres
+    environment:
+      POSTGRES_USER: collider
+      POSTGRES_PASSWORD: collider_dev_pass
+      POSTGRES_DB: collider_custody
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U collider -d collider_custody"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Optional: Local Ethereum node (Anvil from Foundry)
+  # anvil:
+  #   image: ghcr.io/foundry-rs/foundry:latest
+  #   container_name: collider-anvil
+  #   command: anvil --host 0.0.0.0
+  #   ports:
+  #     - "8545:8545"
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: collider-custody-app
+    environment:
+      DATABASE_URL: postgresql+asyncpg://collider:collider_dev_pass@postgres:5432/collider_custody
+      DATABASE_URL_SYNC: postgresql://collider:collider_dev_pass@postgres:5432/collider_custody
+      ETH_RPC_URL: ${ETH_RPC_URL:-https://ethereum-sepolia-rpc.publicnode.com}
+      DEV_SIGNER_PRIVATE_KEY: ${DEV_SIGNER_PRIVATE_KEY:-0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80}
+      JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_change_in_production}
+      ENVIRONMENT: development
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./:/app
+    command: >
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+  # Next.js Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: collider-frontend
+    environment:
+      NEXT_PUBLIC_CORE_API_URL: http://localhost:8000
+      NEXT_PUBLIC_WS_URL: ws://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - app
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+
+  # MPC Bank Signer Node (Go + tss-lib)
+  mpc-signer:
+    build:
+      context: ./mpc-signer
+      dockerfile: Dockerfile
+    container_name: collider-mpc-signer
+    environment:
+      MPC_STORAGE_PASSWORD: ${MPC_STORAGE_PASSWORD:-dev_mpc_password_change_in_production}
+      MPC_NODE_ID: bank-node-1
+      MPC_LOG_LEVEL: info
+    ports:
+      - "50051:50051"
+    volumes:
+      - mpc_shares:/app/data/shares
+    healthcheck:
+      test: ["CMD", "true"]  # Basic check, replace with gRPC health check
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  postgres_data:
+  mpc_shares:
+

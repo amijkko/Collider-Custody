@@ -1,0 +1,740 @@
+openapi: 3.1.0
+info:
+  title: Collider Custody - Transaction Security Layer
+  description: |
+    On-prem Transaction Security Layer + Wallet-as-a-Service (Ethereum)
+    
+    ## Features
+    - Wallet Registry (WaaS) - Create and manage Ethereum wallets
+    - Transaction Orchestrator - State machine for transaction lifecycle
+    - KYT (Know Your Transaction) - Screen transactions
+    - Policy Engine - Enforce limits and rules
+    - Approvals with SoD - Multi-approval workflows
+    - Signing Adapter - Dev mode signer
+    - Chain Listener - Monitor confirmations
+    - Audit Log - Tamper-evident hash-chain
+  version: 1.0.0
+  contact:
+    name: Collider Team
+
+servers:
+  - url: http://localhost:8000
+    description: Local development
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    CorrelationId:
+      name: X-Correlation-ID
+      in: header
+      required: false
+      schema:
+        type: string
+      description: Request correlation ID for tracing
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+      description: Idempotency key for POST requests
+
+  schemas:
+    WalletType:
+      type: string
+      enum: [RETAIL, TREASURY, OPS, SETTLEMENT]
+    
+    RiskProfile:
+      type: string
+      enum: [LOW, MEDIUM, HIGH]
+    
+    WalletRoleType:
+      type: string
+      enum: [OWNER, OPERATOR, VIEWER, APPROVER]
+    
+    TxType:
+      type: string
+      enum: [WITHDRAW, TRANSFER, CONTRACT_CALL]
+    
+    TxStatus:
+      type: string
+      enum:
+        - SUBMITTED
+        - KYT_PENDING
+        - KYT_BLOCKED
+        - KYT_REVIEW
+        - POLICY_EVAL_PENDING
+        - POLICY_BLOCKED
+        - APPROVAL_PENDING
+        - REJECTED
+        - SIGN_PENDING
+        - SIGNED
+        - FAILED_SIGN
+        - BROADCAST_PENDING
+        - BROADCASTED
+        - FAILED_BROADCAST
+        - CONFIRMING
+        - CONFIRMED
+        - FINALIZED
+    
+    PolicyType:
+      type: string
+      enum:
+        - ADDRESS_DENYLIST
+        - TOKEN_DENYLIST
+        - TX_LIMIT
+        - DAILY_LIMIT
+        - APPROVAL_REQUIRED
+    
+    UserRole:
+      type: string
+      enum: [ADMIN, OPERATOR, COMPLIANCE, VIEWER]
+    
+    WalletCreate:
+      type: object
+      required:
+        - wallet_type
+        - subject_id
+      properties:
+        wallet_type:
+          $ref: '#/components/schemas/WalletType'
+        subject_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+        tags:
+          type: object
+        risk_profile:
+          $ref: '#/components/schemas/RiskProfile'
+          default: MEDIUM
+    
+    WalletResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        address:
+          type: string
+        wallet_type:
+          $ref: '#/components/schemas/WalletType'
+        subject_id:
+          type: string
+        tags:
+          type: object
+        risk_profile:
+          $ref: '#/components/schemas/RiskProfile'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        roles:
+          type: array
+          items:
+            $ref: '#/components/schemas/WalletRoleResponse'
+    
+    WalletRoleAssign:
+      type: object
+      required:
+        - user_id
+        - role
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        role:
+          $ref: '#/components/schemas/WalletRoleType'
+    
+    WalletRoleResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        wallet_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        role:
+          $ref: '#/components/schemas/WalletRoleType'
+        created_at:
+          type: string
+          format: date-time
+        created_by:
+          type: string
+          format: uuid
+    
+    TxRequestCreate:
+      type: object
+      required:
+        - wallet_id
+        - tx_type
+        - to_address
+        - amount
+      properties:
+        wallet_id:
+          type: string
+          format: uuid
+        tx_type:
+          $ref: '#/components/schemas/TxType'
+        to_address:
+          type: string
+          pattern: ^0x[a-fA-F0-9]{40}$
+        asset:
+          type: string
+          default: ETH
+        amount:
+          type: string
+          format: decimal
+        data:
+          type: string
+          description: Hex-encoded data for CONTRACT_CALL
+    
+    TxRequestResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        wallet_id:
+          type: string
+          format: uuid
+        tx_type:
+          $ref: '#/components/schemas/TxType'
+        to_address:
+          type: string
+        asset:
+          type: string
+        amount:
+          type: string
+        data:
+          type: string
+        status:
+          $ref: '#/components/schemas/TxStatus'
+        kyt_result:
+          type: string
+        kyt_case_id:
+          type: string
+        policy_result:
+          type: object
+        requires_approval:
+          type: boolean
+        required_approvals:
+          type: integer
+        tx_hash:
+          type: string
+        block_number:
+          type: integer
+        confirmations:
+          type: integer
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        approvals:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApprovalResponse'
+    
+    ApprovalCreate:
+      type: object
+      required:
+        - decision
+      properties:
+        decision:
+          type: string
+          enum: [APPROVED, REJECTED]
+        comment:
+          type: string
+    
+    ApprovalResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        tx_request_id:
+          type: string
+        user_id:
+          type: string
+        decision:
+          type: string
+        comment:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    
+    KYTCaseResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        address:
+          type: string
+        direction:
+          type: string
+          enum: [INBOUND, OUTBOUND]
+        reason:
+          type: string
+        status:
+          type: string
+        resolved_by:
+          type: string
+        resolved_at:
+          type: string
+          format: date-time
+        resolution_comment:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    
+    KYTCaseResolve:
+      type: object
+      required:
+        - decision
+      properties:
+        decision:
+          type: string
+          enum: [ALLOW, BLOCK]
+        comment:
+          type: string
+    
+    PolicyCreate:
+      type: object
+      required:
+        - name
+        - policy_type
+      properties:
+        name:
+          type: string
+        policy_type:
+          $ref: '#/components/schemas/PolicyType'
+        address:
+          type: string
+        token:
+          type: string
+        wallet_id:
+          type: string
+        wallet_type:
+          type: string
+        limit_amount:
+          type: string
+        required_approvals:
+          type: integer
+          default: 0
+        config:
+          type: object
+        is_active:
+          type: boolean
+          default: true
+    
+    PolicyResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        policy_type:
+          $ref: '#/components/schemas/PolicyType'
+        address:
+          type: string
+        token:
+          type: string
+        wallet_id:
+          type: string
+        wallet_type:
+          type: string
+        limit_amount:
+          type: string
+        required_approvals:
+          type: integer
+        config:
+          type: object
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        created_by:
+          type: string
+    
+    AuditPackageResponse:
+      type: object
+      properties:
+        tx_request_id:
+          type: string
+        tx_request:
+          type: object
+        policy_evaluation:
+          type: object
+        kyt_evaluation:
+          type: object
+        approvals:
+          type: array
+          items:
+            type: object
+        signing:
+          type: object
+        broadcast:
+          type: object
+        confirmations:
+          type: object
+        audit_events:
+          type: array
+          items:
+            type: object
+        package_hash:
+          type: string
+        generated_at:
+          type: string
+          format: date-time
+    
+    AuditVerifyResponse:
+      type: object
+      properties:
+        is_valid:
+          type: boolean
+        total_events:
+          type: integer
+        verified_events:
+          type: integer
+        first_event_id:
+          type: string
+        last_event_id:
+          type: string
+        chain_intact:
+          type: boolean
+        errors:
+          type: array
+          items:
+            type: string
+    
+    CorrelatedResponse:
+      type: object
+      properties:
+        correlation_id:
+          type: string
+        data:
+          type: object
+        timestamp:
+          type: string
+          format: date-time
+    
+    ErrorResponse:
+      type: object
+      properties:
+        correlation_id:
+          type: string
+        error:
+          type: string
+        error_code:
+          type: string
+        details:
+          type: object
+        timestamp:
+          type: string
+          format: date-time
+
+paths:
+  /v1/auth/register:
+    post:
+      tags: [Authentication]
+      summary: Register new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, email, password]
+              properties:
+                username:
+                  type: string
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  minLength: 8
+                role:
+                  $ref: '#/components/schemas/UserRole'
+      responses:
+        '200':
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CorrelatedResponse'
+  
+  /v1/auth/login:
+    post:
+      tags: [Authentication]
+      summary: Login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CorrelatedResponse'
+  
+  /v1/wallets:
+    post:
+      tags: [Wallets]
+      summary: Create wallet
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WalletCreate'
+      responses:
+        '200':
+          description: Wallet created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CorrelatedResponse'
+    get:
+      tags: [Wallets]
+      summary: List wallets
+      parameters:
+        - name: wallet_type
+          in: query
+          schema:
+            $ref: '#/components/schemas/WalletType'
+        - name: subject_id
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: List of wallets
+  
+  /v1/wallets/{wallet_id}/roles:
+    post:
+      tags: [Wallets]
+      summary: Assign role to wallet
+      parameters:
+        - name: wallet_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WalletRoleAssign'
+      responses:
+        '200':
+          description: Role assigned
+  
+  /v1/tx-requests:
+    post:
+      tags: [Transactions]
+      summary: Create transaction request
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TxRequestCreate'
+      responses:
+        '200':
+          description: Transaction request created
+    get:
+      tags: [Transactions]
+      summary: List transaction requests
+      parameters:
+        - name: wallet_id
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/TxStatus'
+      responses:
+        '200':
+          description: List of transactions
+  
+  /v1/tx-requests/{tx_request_id}/approve:
+    post:
+      tags: [Transactions]
+      summary: Approve/reject transaction
+      description: SoD enforced - creator cannot approve
+      parameters:
+        - name: tx_request_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApprovalCreate'
+      responses:
+        '200':
+          description: Approval recorded
+  
+  /v1/cases:
+    get:
+      tags: [KYT Cases]
+      summary: List KYT cases
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: direction
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of cases
+  
+  /v1/cases/{case_id}/resolve:
+    post:
+      tags: [KYT Cases]
+      summary: Resolve KYT case
+      parameters:
+        - name: case_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/KYTCaseResolve'
+      responses:
+        '200':
+          description: Case resolved
+  
+  /v1/policies:
+    post:
+      tags: [Policies]
+      summary: Create policy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PolicyCreate'
+      responses:
+        '200':
+          description: Policy created
+    get:
+      tags: [Policies]
+      summary: List policies
+      responses:
+        '200':
+          description: List of policies
+  
+  /v1/audit/packages/{tx_request_id}:
+    get:
+      tags: [Audit]
+      summary: Get audit package for transaction
+      parameters:
+        - name: tx_request_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Audit package
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditPackageResponse'
+  
+  /v1/audit/verify:
+    get:
+      tags: [Audit]
+      summary: Verify audit hash chain
+      parameters:
+        - name: from_sequence
+          in: query
+          schema:
+            type: integer
+        - name: to_sequence
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditVerifyResponse'
+  
+  /health:
+    get:
+      tags: [System]
+      summary: Health check
+      security: []
+      responses:
+        '200':
+          description: Service is healthy
+
