@@ -1,9 +1,17 @@
+const path = require('path');
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   // Production optimizations
   reactStrictMode: true,
   swcMinify: true,
   compress: true,
+
+  // Webpack config for path aliases
+  webpack: (config) => {
+    config.resolve.alias['@'] = path.join(__dirname, 'src');
+    return config;
+  },
   
   // Environment variables
   env: {
