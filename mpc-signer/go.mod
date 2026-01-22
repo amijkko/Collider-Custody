@@ -3,6 +3,7 @@ module github.com/collider/mpc-signer
 go 1.21
 
 require (
+	github.com/bnb-chain/tss-lib/v2 v2.0.0
 	github.com/google/uuid v1.6.0
 	go.uber.org/zap v1.26.0
 	golang.org/x/crypto v0.18.0

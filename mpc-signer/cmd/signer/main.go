@@ -12,6 +12,7 @@ import (
 
 	"github.com/collider/mpc-signer/internal/server"
 	"github.com/collider/mpc-signer/internal/storage"
+	"github.com/collider/mpc-signer/proto"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"google.golang.org/grpc"
@@ -65,7 +66,7 @@ func main() {
 	mpcServer := server.NewMPCServer(store, *nodeID, logger)
 
 	// Register service
-	server.RegisterMPCSignerServer(grpcServer, mpcServer)
+	proto.RegisterMPCSignerServer(grpcServer, mpcServer)
 
 	// Enable reflection for debugging
 	reflection.Register(grpcServer)

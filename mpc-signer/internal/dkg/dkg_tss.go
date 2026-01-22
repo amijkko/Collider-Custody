@@ -1,18 +1,18 @@
-//go:build !tss
-// +build !tss
+//go:build tss
+// +build tss
 
 package dkg
 
 import (
 	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"sync"
 	"time"
 
+	"github.com/bnb-chain/tss-lib/v2/ecdsa/keygen"
+	"github.com/bnb-chain/tss-lib/v2/tss"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/sha3"
 )
@@ -25,9 +25,15 @@ type DKGSession struct {
 	Threshold    int
 	TotalParties int
 
-	round     int
-	completed bool
-	mu        sync.Mutex
+	party    tss.Party
+	outCh    chan tss.Message
+	endCh    chan keygen.LocalPartySaveData
+	errCh    chan *tss.Error
+	params   *tss.Parameters
+	partyIDs tss.SortedPartyIDs
+
+	mu sync.Mutex
+
 	CreatedAt time.Time
 	logger    *zap.Logger
 }
@@ -79,24 +85,59 @@ func (h *DKGHandler) StartSession(
 		zap.Int("total_parties", totalParties),
 	)
 
+	partyIDs := make([]*tss.PartyID, totalParties)
+	for i := 0; i < totalParties; i++ {
+		partyIDs[i] = tss.NewPartyID(
+			fmt.Sprintf("party-%d", i),
+			fmt.Sprintf("Party %d", i),
+			big.NewInt(int64(i)),
+		)
+	}
+
+	sortedPartyIDs := tss.SortPartyIDs(partyIDs)
+	thisPartyID := sortedPartyIDs[partyIndex]
+
+	ctx := tss.NewPeerContext(sortedPartyIDs)
+	params := tss.NewParameters(tss.S256(), ctx, thisPartyID, totalParties, threshold)
+
+	outCh := make(chan tss.Message, 100)
+	endCh := make(chan keygen.LocalPartySaveData, 1)
+	errCh := make(chan *tss.Error, 1)
+
+	party := keygen.NewLocalParty(params, outCh, endCh)
+
 	session := &DKGSession{
 		SessionID:    sessionID,
 		WalletID:     walletID,
 		PartyIndex:   partyIndex,
 		Threshold:    threshold,
 		TotalParties: totalParties,
-		round:        0,
+		party:        party,
+		outCh:        outCh,
+		endCh:        endCh,
+		errCh:        errCh,
+		params:       params,
+		partyIDs:     sortedPartyIDs,
 		CreatedAt:    time.Now(),
 		logger:       h.logger,
 	}
 
 	h.sessions[sessionID] = session
 
-	// Generate first round message (simulated)
-	round1Msg := make([]byte, 64)
-	rand.Read(round1Msg)
+	go func() {
+		if err := party.Start(); err != nil {
+			h.logger.Error("Failed to start DKG party", zap.Error(err))
+			errCh <- &tss.Error{Cause: err}
+		}
+	}()
 
-	return session, round1Msg, nil
+	firstRoundMsg, err := session.collectOutgoingMessages()
+	if err != nil {
+		delete(h.sessions, sessionID)
+		return nil, nil, fmt.Errorf("failed to collect first round messages: %w", err)
+	}
+
+	return session, firstRoundMsg, nil
 }
 
 // ProcessRound processes incoming messages and returns outgoing messages
@@ -122,65 +163,54 @@ func (h *DKGHandler) ProcessRound(
 		zap.Int("incoming_count", len(incomingMessages)),
 	)
 
-	session.round = round
-
-	// Simulate DKG completion after round 3
-	if round >= 3 {
-		// Generate a key pair (simulated)
-		// Using P256 for simulation (in production, use secp256k1 from tss-lib)
-		privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	for _, msgBytes := range incomingMessages {
+		msg, err := tss.ParseWireMessage(msgBytes, session.partyIDs[0], session.params.Parties().IDs()[0].KeyInt() != nil)
 		if err != nil {
-			return nil, nil, false, fmt.Errorf("failed to generate key: %w", err)
+			h.logger.Warn("Failed to parse message", zap.Error(err))
+			continue
 		}
 
-		// Serialize public key
-		pubKeyCompressed := serializeCompressedPublicKey(&privateKey.PublicKey)
-		pubKeyFull := serializeUncompressedPublicKey(&privateKey.PublicKey)
+		go func(m tss.ParsedMessage) {
+			if _, err := session.party.Update(m); err != nil {
+				h.logger.Warn("Failed to update party", zap.Error(err))
+			}
+		}(msg)
+	}
 
-		// Derive Ethereum address
-		address := publicKeyToAddress(&privateKey.PublicKey)
-
-		// Generate keyset ID
-		keysetID := fmt.Sprintf("keyset-%s-%d", sessionID[:8], time.Now().Unix())
-
-		// Serialize save data (simulated)
-		saveData := map[string]interface{}{
-			"keyset_id":         keysetID,
-			"party_index":       session.PartyIndex,
-			"threshold":         session.Threshold,
-			"total_parties":     session.TotalParties,
-			"curve":             "P-256",
-			"private_key_d_b64": base64.StdEncoding.EncodeToString(privateKey.D.Bytes()),
+	select {
+	case saveData := <-session.endCh:
+		result, err := buildResultFromSaveData(sessionID, saveData)
+		if err != nil {
+			h.mu.Lock()
+			delete(h.sessions, sessionID)
+			h.mu.Unlock()
+			return nil, nil, false, err
 		}
-		saveDataBytes, _ := json.Marshal(saveData)
-
-		result := &DKGResult{
-			KeysetID:        keysetID,
-			PublicKey:       pubKeyCompressed,
-			PublicKeyFull:   pubKeyFull,
-			EthereumAddress: address,
-			SaveData:        saveDataBytes,
-		}
-
-		session.completed = true
 
 		h.logger.Info("DKG complete",
 			zap.String("session_id", sessionID),
 			zap.String("address", result.EthereumAddress),
 		)
 
-		// Cleanup
 		h.mu.Lock()
 		delete(h.sessions, sessionID)
 		h.mu.Unlock()
 
 		return nil, result, true, nil
-	}
 
-	// Generate outgoing message for next round
-	outMsg := make([]byte, 64)
-	rand.Read(outMsg)
-	return outMsg, nil, false, nil
+	case err := <-session.errCh:
+		h.mu.Lock()
+		delete(h.sessions, sessionID)
+		h.mu.Unlock()
+		return nil, nil, false, fmt.Errorf("dkg error: %v", err)
+
+	default:
+		outMsg, err := session.collectOutgoingMessages()
+		if err != nil {
+			return nil, nil, false, err
+		}
+		return outMsg, nil, false, nil
+	}
 }
 
 // GetSession returns a session by ID
@@ -198,10 +228,62 @@ func (h *DKGHandler) CleanupSession(sessionID string) {
 	delete(h.sessions, sessionID)
 }
 
-// Helper functions
+func (s *DKGSession) collectOutgoingMessages() ([]byte, error) {
+	var messages [][]byte
+
+	timeout := time.After(100 * time.Millisecond)
+	for {
+		select {
+		case msg := <-s.outCh:
+			wireBytes, _, err := msg.WireBytes()
+			if err != nil {
+				s.logger.Warn("Failed to serialize message", zap.Error(err))
+				continue
+			}
+			messages = append(messages, wireBytes)
+		case <-timeout:
+			goto done
+		}
+	}
+
+done:
+	if len(messages) == 0 {
+		return nil, nil
+	}
+
+	return json.Marshal(messages)
+}
+
+func buildResultFromSaveData(sessionID string, saveData keygen.LocalPartySaveData) (*DKGResult, error) {
+	if saveData.ECDSAPub == nil {
+		return nil, fmt.Errorf("missing public key in save data")
+	}
+
+	publicKey, err := saveData.ECDSAPub.ToECDSAPubKey()
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert public key: %w", err)
+	}
+
+	pubKeyCompressed := serializeCompressedPublicKey(publicKey)
+	pubKeyFull := serializeUncompressedPublicKey(publicKey)
+	address := publicKeyToAddress(publicKey)
+	keysetID := fmt.Sprintf("keyset-%s-%d", sessionID[:8], time.Now().Unix())
+
+	saveDataBytes, err := json.Marshal(saveData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize save data: %w", err)
+	}
+
+	return &DKGResult{
+		KeysetID:        keysetID,
+		PublicKey:       pubKeyCompressed,
+		PublicKeyFull:   pubKeyFull,
+		EthereumAddress: address,
+		SaveData:        saveDataBytes,
+	}, nil
+}
 
 func serializeCompressedPublicKey(pub *ecdsa.PublicKey) []byte {
-	// Compressed format: 0x02 or 0x03 prefix + 32 bytes X coordinate
 	prefix := byte(0x02)
 	if pub.Y.Bit(0) == 1 {
 		prefix = 0x03
@@ -213,7 +295,6 @@ func serializeCompressedPublicKey(pub *ecdsa.PublicKey) []byte {
 }
 
 func serializeUncompressedPublicKey(pub *ecdsa.PublicKey) []byte {
-	// Uncompressed format: 0x04 prefix + 32 bytes X + 32 bytes Y
 	result := make([]byte, 65)
 	result[0] = 0x04
 	pub.X.FillBytes(result[1:33])
@@ -222,7 +303,6 @@ func serializeUncompressedPublicKey(pub *ecdsa.PublicKey) []byte {
 }
 
 func publicKeyToAddress(pub *ecdsa.PublicKey) string {
-	// Simplified Ethereum address derivation
 	pubBytes := serializeUncompressedPublicKey(pub)[1:]
 	hasher := sha3.NewLegacyKeccak256()
 	_, _ = hasher.Write(pubBytes)

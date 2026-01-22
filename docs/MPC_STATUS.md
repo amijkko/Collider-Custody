@@ -101,7 +101,7 @@
 - ✅ Encrypted share storage (PBKDF2 + AES-256-GCM)
 - ✅ Session timeout и cleanup
 - ✅ SigningPermit validation
-- ⚠️ **Проблема:** `signing.go` все еще импортирует `tss-lib`, но `go.mod` его не содержит
+- ⚠️ По умолчанию используется **симуляция** (P-256); реальный tss-lib доступен через сборку с флагом `-tags tss`
 
 ### 5. Инфраструктура
 
@@ -113,31 +113,20 @@
 
 ## ⚠️ Текущие проблемы
 
-### 1. Go Signer Node не компилируется
+### 1. Реальная tss-lib интеграция требует сборки с флагом
 
 **Проблема:**
-- `mpc-signer/internal/signing/signing.go` импортирует `tss-lib`:
-  ```go
-  import (
-      "github.com/bnb-chain/tss-lib/v2/common"
-      "github.com/bnb-chain/tss-lib/v2/ecdsa/keygen"
-      "github.com/bnb-chain/tss-lib/v2/ecdsa/signing"
-      "github.com/bnb-chain/tss-lib/v2/tss"
-  )
-  ```
-- Но `go.mod` не содержит `tss-lib` (был удален из-за проблем с зависимостями)
-
-**Статус:** `dkg.go` упрощен (симуляция), но `signing.go` все еще требует `tss-lib`
+- Default сборка использует симуляцию DKG/Signing (P-256); tss-lib активируется через `-tags tss`.
 
 **Решение:**
-- Вариант A: Упростить `signing.go` (убрать tss-lib, использовать симуляцию)
-- Вариант B: Исправить зависимости tss-lib (требует времени)
+- Собирать Go signer с `-tags tss` и обеспечить зависимости для `tss-lib`.
+- При необходимости рассмотреть альтернативную библиотеку threshold ECDSA.
 
 ### 2. Реальная криптография не интегрирована
 
 **Текущее состояние:**
-- `dkg.go` - использует `elliptic.P256()` (симуляция, не secp256k1)
-- `signing.go` - ссылается на `tss-lib` (не компилируется)
+- `dkg.go`/`signing.go` - симуляция (P-256) в build по умолчанию
+- `dkg_tss.go`/`signing_tss.go` - реальный tss-lib при сборке с `-tags tss`
 - Нет реального tECDSA протокола
 
 **Требуется:**
@@ -145,17 +134,11 @@
 - Реальный DKG протокол (2-of-2 threshold)
 - Реальный Signing протокол
 
-### 3. gRPC сервер не сгенерирован
+### 3. gRPC stubs
 
-**Проблема:**
-- `proto/mpc.proto` существует
-- Но нет сгенерированного Go кода из proto
-- `server.go` использует placeholder типы вместо реальных gRPC stubs
-
-**Требуется:**
-```bash
-protoc --go_out=. --go-grpc_out=. proto/mpc.proto
-```
+**Статус:**
+- gRPC stubs добавлены в `mpc-signer/proto` (ручная генерация).
+- В будущем заменить на авто‑генерацию через `protoc`/`buf`.
 
 ### 4. MPC Signer не запущен
 
@@ -170,16 +153,11 @@ protoc --go_out=. --go-grpc_out=. proto/mpc.proto
 
 ### Приоритет 1: Завершить Go Signer Node
 
-1. **Упростить `signing.go`** (быстрое решение)
-   - Убрать зависимости от `tss-lib`
-   - Использовать симуляцию (как в `dkg.go`)
-   - Собрать Docker образ
-   - Протестировать gRPC endpoint
-
-2. **Или интегрировать реальный tss-lib** (долгосрочное решение)
-   - Исправить зависимости (`github.com/agl/ed25519` проблема)
+1. **Сборка с tss-lib** (долгосрочное решение)
+   - Собирать с `-tags tss`
+   - Обеспечить зависимости tss-lib
    - Интегрировать реальный DKG/Signing
-   - Сгенерировать gRPC stubs
+   - Заменить ручные gRPC stubs на автогенерацию
 
 ### Приоритет 2: E2E тестирование
 
@@ -217,12 +195,14 @@ protoc --go_out=. --go-grpc_out=. proto/mpc.proto
 mpc-signer/                     # Go Bank Signer Node
 ├── cmd/signer/main.go          # ✅ Entry point
 ├── internal/
-│   ├── dkg/dkg.go              # ⚠️ Упрощен (симуляция)
-│   ├── signing/signing.go      # ❌ Требует tss-lib
-│   ├── server/server.go        # ✅ gRPC server (placeholder)
+│   ├── dkg/dkg.go              # ⚠️ Симуляция (default)
+│   ├── dkg/dkg_tss.go          # ✅ tss-lib (build tag)
+│   ├── signing/signing.go      # ⚠️ Симуляция (default)
+│   ├── signing/signing_tss.go  # ✅ tss-lib (build tag)
+│   ├── server/server.go        # ✅ gRPC server (proto wired)
 │   └── storage/storage.go      # ✅ Encrypted storage
 ├── proto/mpc.proto             # ✅ Protocol definitions
-├── go.mod                      # ⚠️ Без tss-lib
+├── go.mod                      # ✅ С tss-lib (build tag)
 └── Dockerfile                  # ✅ Готов
 
 frontend/src/lib/mpc/           # Browser MPC Client
@@ -246,7 +226,7 @@ app/api/
 - ✅ `go.uber.org/zap` - логирование
 - ✅ `google.golang.org/grpc` - gRPC
 - ✅ `golang.org/x/crypto` - криптография
-- ❌ `github.com/bnb-chain/tss-lib/v2` - **отсутствует** (проблема)
+- ✅ `github.com/bnb-chain/tss-lib/v2` - для сборки с `-tags tss`
 
 **Python:**
 - ✅ Все зависимости установлены
@@ -262,7 +242,7 @@ app/api/
 
 ### Краткосрочные (1-2 дня)
 
-1. **Упростить `signing.go`** - убрать tss-lib, использовать симуляцию
+1. **Собрать signer с tss-lib** - `go build -tags tss ./cmd/signer`
 2. **Собрать Docker образ** - `docker-compose build mpc-signer`
 3. **Запустить сервис** - `docker-compose up mpc-signer`
 4. **Протестировать WebSocket** - создать MPC кошелек через UI
@@ -271,9 +251,7 @@ app/api/
 ### Среднесрочные (1 неделя)
 
 1. **E2E тестирование** - полный flow на Sepolia
-2. **Исправить зависимости tss-lib** - реальная криптография
-3. **Генерация gRPC stubs** - из proto файла
-4. **Оптимизация** - производительность, error handling
+2. **Оптимизация** - производительность, error handling
 
 ### Долгосрочные (2-4 недели)
 
@@ -307,4 +285,3 @@ app/api/
 
 **Последнее обновление:** 2026-01-21  
 **Статус:** Infrastructure готов, требуется завершение Go Signer Node
-
