@@ -1,6 +1,7 @@
 """Alembic environment configuration."""
 import logging
 import os
+import sys
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config
@@ -12,6 +13,12 @@ from app.config import get_settings
 from app.database import Base
 from app.models import *  # noqa: Import all models for autogenerate
 
+# Setup basic logging BEFORE anything else to ensure we see debug messages
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    stream=sys.stderr
+)
 logger = logging.getLogger(__name__)
 
 # this is the Alembic Config object
@@ -19,15 +26,32 @@ config = context.config
 
 # Get database URL from settings
 # Clear cache to ensure fresh settings
-from app.config import get_settings
 get_settings.cache_clear()
 settings = get_settings()
 
-# Log for debugging
-logger.info(f"DATABASE_URL from env: {os.getenv('DATABASE_URL', 'NOT SET')}")
-logger.info(f"DATABASE_URL_SYNC from env: {os.getenv('DATABASE_URL_SYNC', 'NOT SET')}")
-logger.info(f"settings.database_url: {settings.database_url[:50]}...")
-logger.info(f"settings.database_url_sync: {settings.database_url_sync[:50] if settings.database_url_sync else 'None'}...")
+# Log for debugging - use both logger and print to ensure visibility
+db_url_env = os.getenv('DATABASE_URL', 'NOT SET')
+db_sync_env = os.getenv('DATABASE_URL_SYNC', 'NOT SET')
+db_url_setting = settings.database_url[:50] + "..." if len(settings.database_url) > 50 else settings.database_url
+db_sync_setting = (settings.database_url_sync[:50] + "..." if settings.database_url_sync and len(settings.database_url_sync) > 50 else (settings.database_url_sync or 'None'))
+
+# Print to stderr for guaranteed visibility
+print(f"[Alembic] DATABASE_URL from env: {db_url_env}", file=sys.stderr, flush=True)
+print(f"[Alembic] DATABASE_URL_SYNC from env: {db_sync_env}", file=sys.stderr, flush=True)
+print(f"[Alembic] settings.database_url: {db_url_setting}", file=sys.stderr, flush=True)
+print(f"[Alembic] settings.database_url_sync: {db_sync_setting}", file=sys.stderr, flush=True)
+
+logger.info(f"DATABASE_URL from env: {db_url_env}")
+logger.info(f"DATABASE_URL_SYNC from env: {db_sync_env}")
+logger.info(f"settings.database_url: {db_url_setting}")
+logger.info(f"settings.database_url_sync: {db_sync_setting}")
+
+# Validate that we have a valid database URL
+if not settings.database_url_sync or settings.database_url_sync.startswith("postgresql://collider:collider_dev_pass@localhost"):
+    error_msg = f"ERROR: Invalid DATABASE_URL_SYNC! Got: {db_sync_setting}. DATABASE_URL env var: {db_url_env[:50] if db_url_env != 'NOT SET' else 'NOT SET'}"
+    print(f"[Alembic] {error_msg}", file=sys.stderr, flush=True)
+    logger.error(error_msg)
+    raise ValueError(f"Invalid database configuration. DATABASE_URL must be set in Railway environment variables. Current value: {db_sync_setting}")
 
 config.set_main_option("sqlalchemy.url", settings.database_url_sync)
 
