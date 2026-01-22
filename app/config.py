@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     @model_validator(mode='after')
     def process_database_urls(self):
         """Process database URLs for async/sync compatibility."""
+        # Strip whitespace/newlines from URLs (Railway sometimes adds trailing newlines)
+        self.database_url = self.database_url.strip()
+        if self.database_url_sync:
+            self.database_url_sync = self.database_url_sync.strip()
+
         # Convert postgresql:// to postgresql+asyncpg:// for async driver
         if self.database_url.startswith("postgresql://"):
             self.database_url = self.database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
