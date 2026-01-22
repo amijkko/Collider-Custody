@@ -16,14 +16,6 @@ const nextConfig = {
     WS_URL: process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000',
   },
   
-  experimental: {
-    serverActions: {
-      allowedOrigins: process.env.NODE_ENV === 'production' 
-        ? [process.env.VERCEL_URL, process.env.NEXT_PUBLIC_VERCEL_URL].filter(Boolean)
-        : ['localhost:3000'],
-    },
-  },
-  
   // API rewrites for development (not needed in production as we use direct API calls)
   async rewrites() {
     if (process.env.NODE_ENV === 'development') {
