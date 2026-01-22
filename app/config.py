@@ -3,6 +3,7 @@ import os
 from functools import lru_cache
 from typing import List, Optional
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -13,12 +14,13 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://collider:collider_dev_pass@localhost:5432/collider_custody"
     database_url_sync: Optional[str] = None
     
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        # Auto-generate DATABASE_URL_SYNC from DATABASE_URL if not set
-        if self.database_url_sync is None:
+    @model_validator(mode='after')
+    def generate_database_url_sync(self):
+        """Auto-generate DATABASE_URL_SYNC from DATABASE_URL if not set."""
+        if self.database_url_sync is None or self.database_url_sync == "":
             # Replace +asyncpg with empty string for sync connection
             self.database_url_sync = self.database_url.replace("+asyncpg", "")
+        return self
     
     # Ethereum
     eth_rpc_url: str = "https://ethereum-sepolia-rpc.publicnode.com"
