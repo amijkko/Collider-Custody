@@ -1,4 +1,5 @@
 """Application configuration."""
+import os
 from functools import lru_cache
 from typing import List, Optional
 
@@ -10,7 +11,14 @@ class Settings(BaseSettings):
     
     # Database
     database_url: str = "postgresql+asyncpg://collider:collider_dev_pass@localhost:5432/collider_custody"
-    database_url_sync: str = "postgresql://collider:collider_dev_pass@localhost:5432/collider_custody"
+    database_url_sync: Optional[str] = None
+    
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # Auto-generate DATABASE_URL_SYNC from DATABASE_URL if not set
+        if self.database_url_sync is None:
+            # Replace +asyncpg with empty string for sync connection
+            self.database_url_sync = self.database_url.replace("+asyncpg", "")
     
     # Ethereum
     eth_rpc_url: str = "https://ethereum-sepolia-rpc.publicnode.com"
@@ -51,6 +59,8 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         extra = "ignore"
+        # Allow reading from environment variables (case-insensitive)
+        case_sensitive = False
 
 
 @lru_cache()
