@@ -1,5 +1,6 @@
 """Ethereum connectivity service with RPC, retry logic, and nonce management."""
 import asyncio
+import concurrent.futures
 from decimal import Decimal
 from typing import Optional, Dict, Any, List
 from datetime import datetime
@@ -31,6 +32,8 @@ class NonceManager:
             address_lower = address.lower()
             
             # Get on-chain nonce (including pending)
+            # Note: This is called from async context, but web3 is sync
+            # The caller should handle this appropriately
             chain_nonce = web3.eth.get_transaction_count(address, "pending")
             
             # Use max of cached and chain nonce
@@ -164,7 +167,13 @@ class EthereumService:
     async def get_transaction_receipt(self, tx_hash: str) -> Optional[Dict[str, Any]]:
         """Get transaction receipt if available."""
         try:
-            receipt = self.web3.eth.get_transaction_receipt(tx_hash)
+            # Run Web3 call in thread pool to avoid blocking
+            loop = asyncio.get_event_loop()
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                receipt = await loop.run_in_executor(
+                    executor,
+                    lambda: self.web3.eth.get_transaction_receipt(tx_hash)
+                )
             return dict(receipt) if receipt else None
         except TransactionNotFound:
             return None
@@ -174,12 +183,31 @@ class EthereumService:
     
     async def get_block_number(self) -> int:
         """Get current block number."""
-        return self.web3.eth.block_number
+        try:
+            # Web3 calls are synchronous, but we're in async context
+            # Run in thread pool to avoid blocking
+            import concurrent.futures
+            loop = asyncio.get_event_loop()
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                block_number = await loop.run_in_executor(
+                    executor, 
+                    lambda: self.web3.eth.block_number
+                )
+            return block_number
+        except Exception as e:
+            logger.error(f"Failed to get block number from {self.settings.eth_rpc_url}: {e}")
+            raise
     
     async def get_block(self, block_number: int) -> Optional[Dict[str, Any]]:
         """Get block by number."""
         try:
-            block = self.web3.eth.get_block(block_number, full_transactions=True)
+            # Run Web3 call in thread pool to avoid blocking
+            loop = asyncio.get_event_loop()
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                block = await loop.run_in_executor(
+                    executor,
+                    lambda: self.web3.eth.get_block(block_number, full_transactions=True)
+                )
             return dict(block) if block else None
         except Exception as e:
             logger.warning(f"Failed to get block {block_number}: {e}")

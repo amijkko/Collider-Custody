@@ -71,18 +71,24 @@ export function CreateMPCWalletModal({
 
     try {
       const client = createMPCClient({
-        onProgress: (message, round, total) => {
+        wsUrl: process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000',
+        onProgress: (message: string, round: number, total: number) => {
           setProgress(message);
           setProgressRound(round);
           setTotalRounds(total);
         },
-        onError: (err) => {
+        onError: (err: Error) => {
           setError(err.message);
           setStep('error');
         },
       });
 
-      const dkgResult = await client.createWallet(walletId, password);
+      await client.connect();
+      const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
+      if (token) {
+        await client.authenticate();
+      }
+      const dkgResult = await client.startDKG(walletId, password);
 
       setResult({
         keysetId: dkgResult.keysetId,

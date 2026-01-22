@@ -35,7 +35,7 @@ export default function AdminDepositsPage() {
       // Fetch real deposits from API (admin endpoint)
       const response = await depositsApi.listAdmin();
       console.log('Admin deposits response:', response);
-      setDeposits(response.data || []);
+      setDeposits(response.data?.data || []);
     } catch (error) {
       console.error('Failed to load deposits:', error);
       // Don't use toast here to avoid infinite loop
@@ -142,7 +142,7 @@ export default function AdminDepositsPage() {
                             </a>
                           </div>
                           <p className="text-sm text-surface-500">
-                            {formatRelativeTime(deposit.detected_at || deposit.created_at)} · Tx: {formatAddress(deposit.tx_hash)}
+                            {formatRelativeTime(deposit.created_at)} · Tx: {formatAddress(deposit.tx_hash)}
                           </p>
                           {deposit.kyt_result === 'REVIEW' && (
                             <span className="text-xs text-amber-400">⚠️ KYT flagged for review</span>
@@ -221,7 +221,7 @@ export default function AdminDepositsPage() {
                             <StatusBadge status={deposit.status} />
                           </td>
                           <td className="py-3 px-4 text-sm text-surface-500">
-                            {formatRelativeTime(deposit.detected_at || deposit.created_at)}
+                            {formatRelativeTime(deposit.created_at)}
                           </td>
                           <td className="py-3 px-4 text-sm text-surface-400">
                             {deposit.approved_by || '—'}

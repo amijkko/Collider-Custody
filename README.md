@@ -66,6 +66,12 @@ FINALIZED (terminal success)
 
 ## Quick Start
 
+### Deployment
+
+См. [DEPLOYMENT.md](./docs/DEPLOYMENT.md) для полного руководства по деплою на Vercel (Frontend) и Railway (Backend + PostgreSQL).
+
+### Local Development
+
 ### Prerequisites
 
 - Docker & Docker Compose

@@ -1,0 +1,19 @@
+# Railway Environment Variables
+# Используйте этот файл для быстрого копирования переменных в Railway Dashboard
+# Или используйте Railway CLI: railway variables set --file railway.variables.txt
+
+DATABASE_URL_SYNC=postgresql://postgres:password@host:port/database
+JWT_SECRET=15e168cc721bde3aded0dd886b6676180520aa3a1c89eca00740e0c8fe93a4db
+JWT_ALGORITHM=HS256
+JWT_EXPIRE_MINUTES=60
+ENVIRONMENT=production
+ETH_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
+CORS_ORIGINS=https://your-app.vercel.app,https://your-app-git-main.vercel.app,http://localhost:3000
+PRODUCTION_DOMAIN=your-app.vercel.app
+CHAIN_LISTENER_POLL_INTERVAL=5
+CONFIRMATION_BLOCKS=3
+KYT_BLACKLIST=0x000000000000000000000000000000000000dead,0xbad0000000000000000000000000000000000bad
+KYT_GRAYLIST=0x1234567890123456789012345678901234567890
+MPC_SIGNER_URL=localhost:50051
+MPC_SIGNER_ENABLED=false
+

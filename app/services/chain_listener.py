@@ -47,7 +47,9 @@ class ChainListener:
             try:
                 await self._poll()
             except Exception as e:
-                logger.error(f"Chain listener error: {e}")
+                logger.error(f"Chain listener error: {e}", exc_info=True)
+                # Continue running even if poll fails
+                # This prevents the listener from stopping due to temporary RPC issues
             
             await asyncio.sleep(self.poll_interval)
     
@@ -93,12 +95,16 @@ class ChainListener:
             correlation_id = f"chain-listener-{uuid4()}"
             
             try:
-                confirmations = await ethereum.check_confirmations(
-                    tx.tx_hash,
-                    tx.id,
-                    correlation_id,
-                    self.settings.confirmation_blocks
-                )
+                try:
+                    confirmations = await ethereum.check_confirmations(
+                        tx.tx_hash,
+                        tx.id,
+                        correlation_id,
+                        self.settings.confirmation_blocks
+                    )
+                except Exception as rpc_error:
+                    logger.warning(f"RPC connection failed while checking confirmations for tx {tx.id}: {rpc_error}")
+                    continue
                 
                 if confirmations is None:
                     continue
@@ -170,7 +176,12 @@ class ChainListener:
     ):
         """Check for inbound deposits to monitored wallets."""
         try:
-            current_block = await ethereum.get_block_number()
+            # Check RPC connectivity first
+            try:
+                current_block = await ethereum.get_block_number()
+            except Exception as rpc_error:
+                logger.warning(f"RPC connection failed, skipping deposit check: {rpc_error}")
+                return
             
             # Initialize last processed block
             if self._last_processed_block is None:

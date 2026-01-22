@@ -31,7 +31,7 @@ export default function DepositPage() {
       // Fetch real deposits from API
       if (mpcWallet) {
         const depositsRes = await depositsApi.list({ wallet_id: mpcWallet.id });
-        setDeposits(depositsRes.data || []);
+        setDeposits(depositsRes.data?.data || []);
       } else {
         setDeposits([]);
       }
@@ -179,7 +179,7 @@ export default function DepositPage() {
                             From: {formatAddress(deposit.from_address)}
                           </p>
                           <p className="text-sm text-surface-500">
-                            {formatRelativeTime(deposit.detected_at || deposit.created_at)} · Tx: {formatAddress(deposit.tx_hash)}
+                            {formatRelativeTime(deposit.created_at)} · Tx: {formatAddress(deposit.tx_hash)}
                           </p>
                         </div>
                       </div>

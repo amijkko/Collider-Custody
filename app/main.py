@@ -1,6 +1,7 @@
 """Main FastAPI application."""
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -45,6 +46,7 @@ async def lifespan(app: FastAPI):
     logger.info("Starting Collider Custody Service...")
     
     # Start chain listener in background
+    # Chain listener monitors blockchain for confirmations and inbound deposits
     chain_listener = ChainListener(
         session_maker=async_session_maker,
         poll_interval=settings.chain_listener_poll_interval
@@ -98,9 +100,36 @@ This API provides enterprise-grade custody and transaction management for Ethere
 )
 
 # CORS middleware
+# Get allowed origins from environment or use defaults
+def get_allowed_origins():
+    """Get allowed CORS origins from environment or defaults."""
+    env_origins = os.getenv("CORS_ORIGINS", "")
+    if env_origins:
+        return [origin.strip() for origin in env_origins.split(",") if origin.strip()]
+    
+    # Default origins for development
+    default_origins = [
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3000",
+    ]
+    
+    # Add Vercel preview and production URLs if available
+    vercel_url = os.getenv("VERCEL_URL")
+    if vercel_url:
+        default_origins.append(f"https://{vercel_url}")
+    
+    # Add custom production domain if set
+    prod_domain = os.getenv("PRODUCTION_DOMAIN")
+    if prod_domain:
+        default_origins.append(f"https://{prod_domain}")
+        default_origins.append(f"https://www.{prod_domain}")
+    
+    return default_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=get_allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

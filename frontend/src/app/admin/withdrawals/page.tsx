@@ -73,7 +73,7 @@ export default function AdminWithdrawalsPage() {
   };
 
   const pendingApproval = withdrawals.filter(w => w.status === 'APPROVAL_PENDING');
-  const pendingSignature = withdrawals.filter(w => w.status === 'SIGN_PENDING' || w.status === 'APPROVED');
+  const pendingSignature = withdrawals.filter(w => w.status === 'SIGN_PENDING');
   const inProgress = withdrawals.filter(w => ['BROADCASTED', 'CONFIRMING'].includes(w.status));
   const completed = withdrawals.filter(w => ['FINALIZED', 'REJECTED', 'FAILED'].includes(w.status));
 

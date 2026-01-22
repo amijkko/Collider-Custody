@@ -11,6 +11,7 @@ import { formatAddress, formatEth } from '@/lib/utils';
 interface Transaction {
   id: string;
   walletId: string;
+  mpcKeysetId?: string | null;
   toAddress: string;
   amount: string;
   status: string;
@@ -45,10 +46,10 @@ export function SignTransactionModal({
 
   // Check if we have a share for this wallet
   React.useEffect(() => {
-    if (open && transaction.walletId) {
-      hasShare(transaction.walletId).then(setHasLocalShare);
+    if (open && transaction.mpcKeysetId) {
+      hasShare(transaction.mpcKeysetId).then(setHasLocalShare);
     }
-  }, [open, transaction.walletId]);
+  }, [open, transaction.mpcKeysetId]);
 
   // Reset state when modal opens
   React.useEffect(() => {
@@ -72,21 +73,28 @@ export function SignTransactionModal({
 
     try {
       const client = createMPCClient({
-        onProgress: (message, round, total) => {
+        wsUrl: process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000',
+        onProgress: (message: string, round: number, total: number) => {
           setProgress(message);
           setProgressRound(round);
           setTotalRounds(total);
         },
-        onError: (err) => {
+        onError: (err: Error) => {
           setError(err.message);
           setStep('error');
         },
       });
 
-      const result = await client.signTransaction(
-        transaction.walletId,
+      await client.connect();
+      const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
+      if (token) {
+        await client.authenticate();
+      }
+      const result = await client.startSigning(
+        transaction.mpcKeysetId || '',
         transaction.id,
         messageHash,
+        transaction.walletId,
         password
       );
 

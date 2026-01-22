@@ -1,0 +1,87 @@
+# Backend code (will be deployed as serverless functions)
+# app/ is included via api/index.py
+
+# MPC Signer (Go)
+mpc-signer/
+
+# Docker
+docker-compose.yml
+.dockerignore
+Dockerfile
+Procfile
+
+# Database
+*.db
+*.sqlite3
+collider_custody.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+env/
+.venv/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Node modules (will be installed by Vercel)
+node_modules/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+env.example
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Documentation (optional, can include if needed)
+# docs/
+
+# Plans
+plan_*.md
+*.plan.md
+
+# Secrets
+*.pem
+*.key
+secrets/
+
+# Build artifacts
+dist/
+build/
+.next/
+out/
+
+# Coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Tests
+tests/
+
+# Migrations (will be applied manually to Supabase)
+migrations/
