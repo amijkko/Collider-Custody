@@ -33,7 +33,7 @@ async def create_wallet(
     wallet_data: WalletCreate,
     db: AsyncSession = Depends(get_db),
     wallet_service: WalletService = Depends(get_wallet_service),
-    current_user: User = Depends(require_roles(UserRole.ADMIN, UserRole.OPERATOR)),
+    current_user: User = Depends(get_current_user),  # Allow any authenticated user (demo mode)
     correlation_id: str = Depends(get_correlation_id),
     idempotency_key: Optional[str] = Depends(get_idempotency_key)
 ):
@@ -172,7 +172,7 @@ async def create_mpc_wallet(
     db: AsyncSession = Depends(get_db),
     wallet_service: WalletService = Depends(get_wallet_service),
     mpc_coordinator: MPCCoordinator = Depends(get_mpc_coordinator),
-    current_user: User = Depends(require_roles(UserRole.ADMIN, UserRole.OPERATOR)),
+    current_user: User = Depends(get_current_user),  # Allow any authenticated user (demo mode)
     correlation_id: str = Depends(get_correlation_id),
     idempotency_key: Optional[str] = Depends(get_idempotency_key)
 ):
