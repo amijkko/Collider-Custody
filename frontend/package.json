@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "prebuild": "echo '=== Build Debug ===' && pwd && ls -la && ls -la src/ && ls -la src/lib/ && echo '=== tsconfig ===' && cat tsconfig.json",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"
