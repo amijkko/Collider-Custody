@@ -1,4 +1,6 @@
 """Alembic environment configuration."""
+import logging
+import os
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config
@@ -10,11 +12,23 @@ from app.config import get_settings
 from app.database import Base
 from app.models import *  # noqa: Import all models for autogenerate
 
+logger = logging.getLogger(__name__)
+
 # this is the Alembic Config object
 config = context.config
 
 # Get database URL from settings
+# Clear cache to ensure fresh settings
+from app.config import get_settings
+get_settings.cache_clear()
 settings = get_settings()
+
+# Log for debugging
+logger.info(f"DATABASE_URL from env: {os.getenv('DATABASE_URL', 'NOT SET')}")
+logger.info(f"DATABASE_URL_SYNC from env: {os.getenv('DATABASE_URL_SYNC', 'NOT SET')}")
+logger.info(f"settings.database_url: {settings.database_url[:50]}...")
+logger.info(f"settings.database_url_sync: {settings.database_url_sync[:50] if settings.database_url_sync else 'None'}...")
+
 config.set_main_option("sqlalchemy.url", settings.database_url_sync)
 
 # Interpret the config file for Python logging

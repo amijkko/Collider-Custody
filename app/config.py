@@ -68,5 +68,15 @@ class Settings(BaseSettings):
 @lru_cache()
 def get_settings() -> Settings:
     """Get cached settings instance."""
-    return Settings()
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    settings = Settings()
+    
+    # Log for debugging (hide sensitive parts)
+    db_url_masked = settings.database_url.split('@')[-1] if '@' in settings.database_url else settings.database_url[:30]
+    db_sync_masked = settings.database_url_sync.split('@')[-1] if settings.database_url_sync and '@' in settings.database_url_sync else (settings.database_url_sync[:30] if settings.database_url_sync else 'None')
+    logger.info(f"Settings loaded - DATABASE_URL: ...@{db_url_masked}, DATABASE_URL_SYNC: ...@{db_sync_masked}")
+    
+    return settings
 
