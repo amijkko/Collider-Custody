@@ -31,7 +31,8 @@ export default function DepositPage() {
       // Fetch real deposits from API
       if (mpcWallet) {
         const depositsRes = await depositsApi.list({ wallet_id: mpcWallet.id });
-        setDeposits(depositsRes.data?.data || []);
+        // API returns { data: Deposit[], total, correlation_id }
+        setDeposits(depositsRes.data || []);
       } else {
         setDeposits([]);
       }
