@@ -89,10 +89,11 @@ class TxOrchestrator:
             available_wei = sum(int(amt) for amt in credited_amounts) if credited_amounts else 0
             available_eth = Decimal(available_wei) / Decimal(10**18)
 
-            requested_amount = Decimal(tx_data.amount)
-            if requested_amount > available_eth:
+            requested_wei = Decimal(tx_data.amount)
+            requested_eth = requested_wei / Decimal(10**18)
+            if requested_eth > available_eth:
                 raise ValueError(
-                    f"Insufficient balance. Available: {available_eth} ETH, Requested: {requested_amount} ETH"
+                    f"Insufficient balance. Available: {available_eth} ETH, Requested: {requested_eth} ETH"
                 )
 
         # Create transaction request
