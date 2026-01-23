@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -12,7 +13,6 @@ import (
 	mpcSigning "github.com/collider/mpc-signer/internal/signing"
 	"github.com/collider/mpc-signer/internal/storage"
 	"github.com/collider/mpc-signer/proto"
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -20,15 +20,41 @@ import (
 
 const (
 	sessionTimeout = 5 * time.Minute
-	permitSecret   = "mpc-permit-secret-change-in-production" // TODO: Load from env
 )
+
+// Config holds server configuration
+type Config struct {
+	PermitSecret string // Secret for signing permits (required)
+	NodeID       string // Unique node identifier
+}
+
+// LoadConfigFromEnv loads configuration from environment variables
+func LoadConfigFromEnv() (*Config, error) {
+	permitSecret := os.Getenv("MPC_PERMIT_SECRET")
+	if permitSecret == "" {
+		return nil, fmt.Errorf("MPC_PERMIT_SECRET environment variable is required")
+	}
+	if len(permitSecret) < 32 {
+		return nil, fmt.Errorf("MPC_PERMIT_SECRET must be at least 32 characters")
+	}
+
+	nodeID := os.Getenv("MPC_NODE_ID")
+	if nodeID == "" {
+		nodeID = "bank-signer-1"
+	}
+
+	return &Config{
+		PermitSecret: permitSecret,
+		NodeID:       nodeID,
+	}, nil
+}
 
 // MPCServer implements the gRPC MPC service
 type MPCServer struct {
 	proto.UnimplementedMPCSignerServer
 
+	config         *Config
 	storage        storage.Storage
-	nodeID         string
 	logger         *zap.Logger
 	dkgHandler     *dkg.DKGHandler
 	signingHandler *mpcSigning.SigningHandler
@@ -36,10 +62,17 @@ type MPCServer struct {
 }
 
 // NewMPCServer creates a new MPC server instance
-func NewMPCServer(store storage.Storage, nodeID string, logger *zap.Logger) *MPCServer {
+func NewMPCServer(config *Config, store storage.Storage, logger *zap.Logger) (*MPCServer, error) {
+	if config == nil {
+		return nil, fmt.Errorf("config is required")
+	}
+	if config.PermitSecret == "" {
+		return nil, fmt.Errorf("permit secret is required")
+	}
+
 	server := &MPCServer{
+		config:         config,
 		storage:        store,
-		nodeID:         nodeID,
 		logger:         logger,
 		dkgHandler:     dkg.NewDKGHandler(logger),
 		signingHandler: mpcSigning.NewSigningHandler(logger),
@@ -48,7 +81,7 @@ func NewMPCServer(store storage.Storage, nodeID string, logger *zap.Logger) *MPC
 	// Start cleanup goroutine
 	go server.cleanupExpiredSessions()
 
-	return server
+	return server, nil
 }
 
 // Health implements health check
@@ -119,10 +152,13 @@ func (s *MPCServer) DKGRound(ctx context.Context, req *proto.DKGRoundRequest) (*
 		zap.Int("incoming_messages", len(req.IncomingMessages)),
 	)
 
-	// Convert incoming messages
-	var incomingMsgs [][]byte
+	// Convert incoming messages with sender information
+	incomingMsgs := make([]dkg.IncomingMessage, 0, len(req.IncomingMessages))
 	for _, msg := range req.IncomingMessages {
-		incomingMsgs = append(incomingMsgs, msg.Payload)
+		incomingMsgs = append(incomingMsgs, dkg.IncomingMessage{
+			FromPartyIndex: int(msg.FromParty),
+			Payload:        msg.Payload,
+		})
 	}
 
 	// Process the round
@@ -246,10 +282,13 @@ func (s *MPCServer) SigningRound(ctx context.Context, req *proto.SigningRoundReq
 		zap.Int32("round", req.Round),
 	)
 
-	// Convert incoming messages
-	var incomingMsgs [][]byte
+	// Convert incoming messages with sender information
+	incomingMsgs := make([]mpcSigning.IncomingMessage, 0, len(req.IncomingMessages))
 	for _, msg := range req.IncomingMessages {
-		incomingMsgs = append(incomingMsgs, msg.Payload)
+		incomingMsgs = append(incomingMsgs, mpcSigning.IncomingMessage{
+			FromPartyIndex: int(msg.FromParty),
+			Payload:        msg.Payload,
+		})
 	}
 
 	// Process the round
@@ -359,7 +398,7 @@ func (s *MPCServer) validatePermit(permit *proto.SigningPermit, keysetID string,
 }
 
 func (s *MPCServer) computePermitSignature(permit *proto.SigningPermit) []byte {
-	h := hmac.New(sha256.New, []byte(permitSecret))
+	h := hmac.New(sha256.New, []byte(s.config.PermitSecret))
 	h.Write([]byte(permit.TxRequestId))
 	h.Write([]byte(permit.WalletId))
 	h.Write([]byte(permit.KeysetId))

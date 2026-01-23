@@ -4,6 +4,7 @@
 package signing
 
 import (
+	"crypto/ecdsa"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -16,6 +17,19 @@ import (
 	"github.com/bnb-chain/tss-lib/v2/tss"
 	"go.uber.org/zap"
 )
+
+// IncomingMessage represents a message from another party
+type IncomingMessage struct {
+	FromPartyIndex int
+	Payload        []byte
+}
+
+// OutgoingMessage represents a message to be sent to other parties
+type OutgoingMessage struct {
+	ToPartyIndex int  // -1 means broadcast to all
+	IsBroadcast  bool // true if message should go to all parties
+	Payload      []byte
+}
 
 // SigningSession represents an active signing session
 type SigningSession struct {
@@ -31,6 +45,7 @@ type SigningSession struct {
 	params    *tss.Parameters
 	partyIDs  tss.SortedPartyIDs
 	signature *common.SignatureData
+	publicKey *ecdsa.PublicKey // For signature verification
 
 	mu sync.Mutex
 
@@ -90,6 +105,16 @@ func (h *SigningHandler) StartSession(
 		return nil, nil, fmt.Errorf("failed to deserialize save data: %w", err)
 	}
 
+	// Extract public key for signature verification
+	var publicKey *ecdsa.PublicKey
+	if saveData.ECDSAPub != nil {
+		var err error
+		publicKey, err = saveData.ECDSAPub.ToECDSAPubKey()
+		if err != nil {
+			h.logger.Warn("Failed to extract public key from save data", zap.Error(err))
+		}
+	}
+
 	partyIDs := make([]*tss.PartyID, totalParties)
 	for i := 0; i < totalParties; i++ {
 		partyIDs[i] = tss.NewPartyID(
@@ -124,6 +149,7 @@ func (h *SigningHandler) StartSession(
 		errCh:       errCh,
 		params:      params,
 		partyIDs:    sortedPartyIDs,
+		publicKey:   publicKey,
 		CreatedAt:   time.Now(),
 		logger:      h.logger,
 	}
@@ -150,7 +176,7 @@ func (h *SigningHandler) StartSession(
 func (h *SigningHandler) ProcessRound(
 	sessionID string,
 	round int,
-	incomingMessages [][]byte,
+	incomingMessages []IncomingMessage,
 ) ([]byte, *SigningResult, bool, error) {
 	h.mu.RLock()
 	session, exists := h.sessions[sessionID]
@@ -169,24 +195,60 @@ func (h *SigningHandler) ProcessRound(
 		zap.Int("incoming_count", len(incomingMessages)),
 	)
 
-	for _, msgBytes := range incomingMessages {
-		msg, err := tss.ParseWireMessage(msgBytes, session.partyIDs[0], session.params.Parties().IDs()[0].KeyInt() != nil)
-		if err != nil {
-			h.logger.Warn("Failed to parse message", zap.Error(err))
+	// Process incoming messages sequentially to avoid race conditions
+	for _, incoming := range incomingMessages {
+		// Validate party index
+		if incoming.FromPartyIndex < 0 || incoming.FromPartyIndex >= len(session.partyIDs) {
+			h.logger.Warn("Invalid party index in message",
+				zap.Int("from_party", incoming.FromPartyIndex),
+				zap.Int("total_parties", len(session.partyIDs)),
+			)
 			continue
 		}
 
-		go func(m tss.ParsedMessage) {
-			if _, err := session.party.Update(m); err != nil {
-				h.logger.Warn("Failed to update party", zap.Error(err))
-			}
-		}(msg)
+		fromPartyID := session.partyIDs[incoming.FromPartyIndex]
+
+		// Parse the wire message with correct sender
+		parsedMsg, err := tss.ParseWireMessage(incoming.Payload, fromPartyID, true)
+		if err != nil {
+			h.logger.Warn("Failed to parse message",
+				zap.Error(err),
+				zap.Int("from_party", incoming.FromPartyIndex),
+			)
+			continue
+		}
+
+		// Update party state (sequential, no goroutine to avoid race)
+		if _, err := session.party.Update(parsedMsg); err != nil {
+			h.logger.Warn("Failed to update party",
+				zap.Error(err),
+				zap.Int("from_party", incoming.FromPartyIndex),
+			)
+		}
 	}
 
+	// Check for completion or errors with a small timeout to allow async processing
 	select {
 	case sigData := <-session.endCh:
 		session.signature = sigData
 		result := session.buildResult()
+
+		// Verify signature before returning
+		if session.publicKey != nil {
+			if err := session.verifySignature(result); err != nil {
+				h.logger.Error("Signature verification failed",
+					zap.String("session_id", sessionID),
+					zap.Error(err),
+				)
+				h.mu.Lock()
+				delete(h.sessions, sessionID)
+				h.mu.Unlock()
+				return nil, nil, false, fmt.Errorf("signature verification failed: %w", err)
+			}
+			h.logger.Debug("Signature verified successfully",
+				zap.String("session_id", sessionID),
+			)
+		}
 
 		h.logger.Info("Signing complete",
 			zap.String("session_id", sessionID),
@@ -205,13 +267,16 @@ func (h *SigningHandler) ProcessRound(
 		h.mu.Unlock()
 		return nil, nil, false, fmt.Errorf("signing error: %v", err)
 
-	default:
-		outMsg, err := session.collectOutgoingMessages()
-		if err != nil {
-			return nil, nil, false, err
-		}
-		return outMsg, nil, false, nil
+	case <-time.After(50 * time.Millisecond):
+		// Give async tss-lib processing a moment to complete
 	}
+
+	// Collect any outgoing messages
+	outMsg, err := session.collectOutgoingMessages()
+	if err != nil {
+		return nil, nil, false, err
+	}
+	return outMsg, nil, false, nil
 }
 
 // GetSession returns a session by ID
@@ -230,19 +295,34 @@ func (h *SigningHandler) CleanupSession(sessionID string) {
 }
 
 func (s *SigningSession) collectOutgoingMessages() ([]byte, error) {
-	var messages [][]byte
+	var messages []OutgoingMessage
 
-	timeout := time.After(100 * time.Millisecond)
+	// First, try to get at least one message with a longer timeout
+	select {
+	case msg := <-s.outCh:
+		outMsg, err := s.convertTSSMessage(msg)
+		if err != nil {
+			s.logger.Warn("Failed to convert message", zap.Error(err))
+		} else {
+			messages = append(messages, outMsg...)
+		}
+	case <-time.After(500 * time.Millisecond):
+		// No messages available yet
+		return nil, nil
+	}
+
+	// Now collect any additional messages that are immediately available
 	for {
 		select {
 		case msg := <-s.outCh:
-			wireBytes, _, err := msg.WireBytes()
+			outMsg, err := s.convertTSSMessage(msg)
 			if err != nil {
-				s.logger.Warn("Failed to serialize message", zap.Error(err))
+				s.logger.Warn("Failed to convert message", zap.Error(err))
 				continue
 			}
-			messages = append(messages, wireBytes)
-		case <-timeout:
+			messages = append(messages, outMsg...)
+		default:
+			// No more messages immediately available
 			goto done
 		}
 	}
@@ -253,6 +333,46 @@ done:
 	}
 
 	return json.Marshal(messages)
+}
+
+// convertTSSMessage converts a tss.Message to OutgoingMessage(s)
+func (s *SigningSession) convertTSSMessage(msg tss.Message) ([]OutgoingMessage, error) {
+	wireBytes, routing, err := msg.WireBytes()
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize message: %w", err)
+	}
+
+	var messages []OutgoingMessage
+
+	if routing.IsBroadcast {
+		// Broadcast message goes to all parties
+		messages = append(messages, OutgoingMessage{
+			ToPartyIndex: -1,
+			IsBroadcast:  true,
+			Payload:      wireBytes,
+		})
+	} else {
+		// Point-to-point messages
+		for _, toParty := range routing.To {
+			// Find the party index
+			toIndex := -1
+			for i, pid := range s.partyIDs {
+				if pid.Id == toParty.Id {
+					toIndex = i
+					break
+				}
+			}
+			if toIndex >= 0 {
+				messages = append(messages, OutgoingMessage{
+					ToPartyIndex: toIndex,
+					IsBroadcast:  false,
+					Payload:      wireBytes,
+				})
+			}
+		}
+	}
+
+	return messages, nil
 }
 
 func (s *SigningSession) buildResult() *SigningResult {
@@ -292,4 +412,24 @@ func padToBytes(data []byte, length int) []byte {
 	result := make([]byte, length)
 	copy(result[length-len(data):], data)
 	return result
+}
+
+// verifySignature verifies the ECDSA signature against the message hash and public key
+func (s *SigningSession) verifySignature(result *SigningResult) error {
+	if s.publicKey == nil {
+		return fmt.Errorf("no public key available for verification")
+	}
+	if result == nil {
+		return fmt.Errorf("no signature result to verify")
+	}
+
+	r := new(big.Int).SetBytes(result.SignatureR)
+	sigS := new(big.Int).SetBytes(result.SignatureS)
+
+	// Verify the signature
+	if !ecdsa.Verify(s.publicKey, s.MessageHash, r, sigS) {
+		return fmt.Errorf("ECDSA signature verification failed")
+	}
+
+	return nil
 }

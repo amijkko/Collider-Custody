@@ -23,7 +23,6 @@ func main() {
 	// Parse flags
 	port := flag.Int("port", 50051, "gRPC server port")
 	storageDir := flag.String("storage", "./data/shares", "Directory for encrypted share storage")
-	nodeID := flag.String("node-id", "bank-node-1", "Unique node identifier")
 	logLevel := flag.String("log-level", "info", "Log level (debug, info, warn, error)")
 	flag.Parse()
 
@@ -31,8 +30,14 @@ func main() {
 	logger := setupLogger(*logLevel)
 	defer logger.Sync()
 
+	// Load server configuration from environment
+	config, err := server.LoadConfigFromEnv()
+	if err != nil {
+		logger.Fatal("Failed to load configuration", zap.Error(err))
+	}
+
 	logger.Info("Starting MPC Signer Node",
-		zap.String("node_id", *nodeID),
+		zap.String("node_id", config.NodeID),
 		zap.Int("port", *port),
 		zap.String("storage_dir", *storageDir),
 	)
@@ -63,7 +68,10 @@ func main() {
 	)
 
 	// Create MPC server
-	mpcServer := server.NewMPCServer(store, *nodeID, logger)
+	mpcServer, err := server.NewMPCServer(config, store, logger)
+	if err != nil {
+		logger.Fatal("Failed to create MPC server", zap.Error(err))
+	}
 
 	// Register service
 	proto.RegisterMPCSignerServer(grpcServer, mpcServer)

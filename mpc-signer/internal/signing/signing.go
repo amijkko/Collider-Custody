@@ -17,6 +17,19 @@ import (
 	"go.uber.org/zap"
 )
 
+// IncomingMessage represents a message from another party
+type IncomingMessage struct {
+	FromPartyIndex int
+	Payload        []byte
+}
+
+// OutgoingMessage represents a message to be sent to other parties
+type OutgoingMessage struct {
+	ToPartyIndex int  // -1 means broadcast to all
+	IsBroadcast  bool // true if message should go to all parties
+	Payload      []byte
+}
+
 // SigningSession represents an active signing session
 type SigningSession struct {
 	SessionID   string
@@ -122,7 +135,7 @@ func (h *SigningHandler) StartSession(
 func (h *SigningHandler) ProcessRound(
 	sessionID string,
 	round int,
-	incomingMessages [][]byte,
+	incomingMessages []IncomingMessage,
 ) ([]byte, *SigningResult, bool, error) {
 	h.mu.RLock()
 	session, exists := h.sessions[sessionID]

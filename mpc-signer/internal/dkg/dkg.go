@@ -17,6 +17,19 @@ import (
 	"golang.org/x/crypto/sha3"
 )
 
+// IncomingMessage represents a message from another party
+type IncomingMessage struct {
+	FromPartyIndex int
+	Payload        []byte
+}
+
+// OutgoingMessage represents a message to be sent to other parties
+type OutgoingMessage struct {
+	ToPartyIndex int  // -1 means broadcast to all
+	IsBroadcast  bool // true if message should go to all parties
+	Payload      []byte
+}
+
 // DKGSession represents an active DKG session
 type DKGSession struct {
 	SessionID    string
@@ -103,7 +116,7 @@ func (h *DKGHandler) StartSession(
 func (h *DKGHandler) ProcessRound(
 	sessionID string,
 	round int,
-	incomingMessages [][]byte,
+	incomingMessages []IncomingMessage,
 ) ([]byte, *DKGResult, bool, error) {
 	h.mu.RLock()
 	session, exists := h.sessions[sessionID]
