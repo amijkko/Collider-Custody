@@ -237,15 +237,35 @@ export const casesApi = {
 };
 
 // Deposits API
+// Note: Deposits endpoints return DepositListResponse directly (not wrapped in CorrelatedResponse)
 export const depositsApi = {
   list: async (params?: { wallet_id?: string; status?: string }) => {
     const query = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
-    return apiFetch<{ data: import('@/types').Deposit[]; total: number; correlation_id: string }>(`/v1/deposits${query}`);
+    // Returns { data: Deposit[], total, correlation_id } directly
+    const response = await fetch(
+      `${CORE_API_URL}/v1/deposits${query}`,
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${typeof window !== 'undefined' ? localStorage.getItem('access_token') || '' : ''}`,
+        },
+      }
+    );
+    return response.json() as Promise<{ data: import('@/types').Deposit[]; total: number; correlation_id: string }>;
   },
 
   listAdmin: async (params?: { wallet_id?: string; status?: string }) => {
     const query = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
-    return apiFetch<{ data: import('@/types').Deposit[]; total: number; correlation_id: string }>(`/v1/deposits/admin${query}`);
+    const response = await fetch(
+      `${CORE_API_URL}/v1/deposits/admin${query}`,
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${typeof window !== 'undefined' ? localStorage.getItem('access_token') || '' : ''}`,
+        },
+      }
+    );
+    return response.json() as Promise<{ data: import('@/types').Deposit[]; total: number; correlation_id: string }>;
   },
 
   get: async (id: string) => {

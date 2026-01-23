@@ -119,16 +119,22 @@ class E2ETest:
 
         result = self._request("GET", f"/v1/deposits?wallet_id={self.wallet_id}")
 
-        if "data" in result and "data" in result["data"]:
-            deposits = result["data"]["data"]
-            pending = [d for d in deposits if d["status"] == "PENDING_ADMIN"]
-            credited = [d for d in deposits if d["status"] == "CREDITED"]
+        # API returns { data: [...deposits], total, correlation_id }
+        if "data" in result:
+            deposits = result["data"]
+            if isinstance(deposits, list):
+                pending = [d for d in deposits if d["status"] == "PENDING_ADMIN"]
+                credited = [d for d in deposits if d["status"] == "CREDITED"]
 
-            print(f"    Total deposits: {len(deposits)}")
-            print(f"    Pending approval: {len(pending)}")
-            print(f"    Credited: {len(credited)}")
+                print(f"    Total deposits: {len(deposits)}")
+                print(f"    Pending approval: {len(pending)}")
+                print(f"    Credited: {len(credited)}")
 
-            return pending
+                for d in deposits:
+                    amt = int(d["amount"]) / 10**18
+                    print(f"      - {d['id'][:8]}... {amt:.4f} ETH [{d['status']}]")
+
+                return pending
 
         return []
 

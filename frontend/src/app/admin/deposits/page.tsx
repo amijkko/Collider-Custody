@@ -33,9 +33,10 @@ export default function AdminDepositsPage() {
     setIsLoading(true);
     try {
       // Fetch real deposits from API (admin endpoint)
+      // Response is { data: Deposit[], total, correlation_id }
       const response = await depositsApi.listAdmin();
       console.log('Admin deposits response:', response);
-      setDeposits(response.data?.data || []);
+      setDeposits(response.data || []);
     } catch (error) {
       console.error('Failed to load deposits:', error);
       // Don't use toast here to avoid infinite loop
