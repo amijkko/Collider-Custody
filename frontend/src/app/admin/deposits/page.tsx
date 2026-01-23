@@ -142,7 +142,7 @@ export default function AdminDepositsPage() {
                             </a>
                           </div>
                           <p className="text-sm text-surface-500">
-                            {formatRelativeTime(deposit.created_at)} · Tx: {formatAddress(deposit.tx_hash)}
+                            {formatRelativeTime(deposit.detected_at)} · Tx: {formatAddress(deposit.tx_hash)}
                           </p>
                           {deposit.kyt_result === 'REVIEW' && (
                             <span className="text-xs text-amber-400">⚠️ KYT flagged for review</span>
@@ -221,7 +221,7 @@ export default function AdminDepositsPage() {
                             <StatusBadge status={deposit.status} />
                           </td>
                           <td className="py-3 px-4 text-sm text-surface-500">
-                            {formatRelativeTime(deposit.created_at)}
+                            {formatRelativeTime(deposit.detected_at)}
                           </td>
                           <td className="py-3 px-4 text-sm text-surface-400">
                             {deposit.approved_by || '—'}
