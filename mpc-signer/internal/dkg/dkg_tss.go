@@ -5,6 +5,7 @@ package dkg
 
 import (
 	"crypto/ecdsa"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/bnb-chain/tss-lib/v2/ecdsa/keygen"
 	"github.com/bnb-chain/tss-lib/v2/tss"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/sha3"
 )
@@ -21,6 +23,14 @@ import (
 type IncomingMessage struct {
 	FromPartyIndex int
 	Payload        []byte
+	IsBroadcast    bool // True if broadcast, false if point-to-point
+}
+
+// UserOutgoingMessage matches the JSON format from WASM (hex-encoded payload)
+type UserOutgoingMessage struct {
+	ToPartyIndex int    `json:"ToPartyIndex"`
+	IsBroadcast  bool   `json:"IsBroadcast"`
+	Payload      string `json:"Payload"` // Hex-encoded bytes
 }
 
 // OutgoingMessage represents a message to be sent to other parties
@@ -198,8 +208,47 @@ func (h *DKGHandler) ProcessRound(
 
 		fromPartyID := session.partyIDs[incoming.FromPartyIndex]
 
-		// Parse the wire message with correct sender
-		parsedMsg, err := tss.ParseWireMessage(incoming.Payload, fromPartyID, true)
+		// Try to parse payload as JSON array of UserOutgoingMessage (new format from WASM)
+		var userMsgs []UserOutgoingMessage
+		if err := json.Unmarshal(incoming.Payload, &userMsgs); err == nil && len(userMsgs) > 0 {
+			h.logger.Debug("Parsed user messages from JSON",
+				zap.Int("count", len(userMsgs)),
+				zap.Int("from_party", incoming.FromPartyIndex),
+			)
+			// Process each message with its correct IsBroadcast flag
+			for _, userMsg := range userMsgs {
+				// Decode hex payload
+				payloadBytes, decodeErr := hex.DecodeString(userMsg.Payload)
+				if decodeErr != nil {
+					h.logger.Warn("Failed to decode hex payload",
+						zap.Error(decodeErr),
+						zap.Int("from_party", incoming.FromPartyIndex),
+					)
+					continue
+				}
+
+				parsedMsg, parseErr := tss.ParseWireMessage(payloadBytes, fromPartyID, userMsg.IsBroadcast)
+				if parseErr != nil {
+					h.logger.Warn("Failed to parse user message",
+						zap.Error(parseErr),
+						zap.Int("from_party", incoming.FromPartyIndex),
+						zap.Bool("is_broadcast", userMsg.IsBroadcast),
+					)
+					continue
+				}
+				if _, updateErr := session.party.Update(parsedMsg); updateErr != nil {
+					h.logger.Warn("Failed to update party",
+						zap.Error(updateErr),
+						zap.Int("from_party", incoming.FromPartyIndex),
+					)
+				}
+			}
+			continue
+		}
+
+		// Fallback: Parse as raw wire bytes (legacy format)
+		// Use IsBroadcast from incoming message, default to true for backwards compatibility
+		parsedMsg, err := tss.ParseWireMessage(incoming.Payload, fromPartyID, incoming.IsBroadcast)
 		if err != nil {
 			h.logger.Warn("Failed to parse message",
 				zap.Error(err),
@@ -367,7 +416,7 @@ func buildResultFromSaveData(sessionID string, saveData keygen.LocalPartySaveDat
 	pubKeyCompressed := serializeCompressedPublicKey(publicKey)
 	pubKeyFull := serializeUncompressedPublicKey(publicKey)
 	address := publicKeyToAddress(publicKey)
-	keysetID := fmt.Sprintf("keyset-%s-%d", sessionID[:8], time.Now().Unix())
+	keysetID := uuid.New().String()
 
 	saveDataBytes, err := json.Marshal(saveData)
 	if err != nil {

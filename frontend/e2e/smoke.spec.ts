@@ -26,12 +26,13 @@ test.describe('Smoke Tests', () => {
     await page.goto('/register');
 
     // Wait for page content
-    await expect(page.getByText(/Create|Register|Sign up/i).first()).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText(/Create account/i).first()).toBeVisible({ timeout: 15000 });
 
     // Should have registration form elements
-    await expect(page.getByPlaceholder(/username/i).first()).toBeVisible();
-    await expect(page.getByPlaceholder(/email/i)).toBeVisible();
-    await expect(page.getByPlaceholder(/password/i).first()).toBeVisible();
+    await expect(page.getByPlaceholder(/choose a username/i)).toBeVisible();
+    await expect(page.getByPlaceholder(/enter your email/i)).toBeVisible();
+    await expect(page.getByPlaceholder(/create a password/i)).toBeVisible();
+    await expect(page.getByPlaceholder(/confirm your password/i)).toBeVisible();
   });
 
   test('login with invalid credentials shows error', async ({ page }) => {

@@ -76,25 +76,38 @@ export async function initTSSWasm(): Promise<void> {
     try {
       // Load wasm_exec.js if not already loaded
       if (typeof Go === 'undefined') {
+        console.log('[TSS-WASM] Loading wasm_exec.js...');
         await loadScript('/wasm/wasm_exec.js');
+        console.log('[TSS-WASM] wasm_exec.js loaded');
       }
 
       // Set up keccak256 helper for Go WASM
       if (typeof window !== 'undefined') {
         (window as any).keccak256 = keccak256Hex;
+        console.log('[TSS-WASM] keccak256 helper registered');
       }
 
       // Initialize Go runtime
       const go = new Go();
+      console.log('[TSS-WASM] Go runtime created');
 
-      // Load WASM module
-      const response = await fetch('/wasm/tss.wasm');
+      // Load WASM module (with cache busting)
+      console.log('[TSS-WASM] Fetching tss.wasm...');
+      const response = await fetch('/wasm/tss.wasm?v=' + Date.now());
+      if (!response.ok) {
+        throw new Error(`Failed to fetch WASM: ${response.status} ${response.statusText}`);
+      }
       const wasmBytes = await response.arrayBuffer();
+      console.log(`[TSS-WASM] WASM loaded: ${wasmBytes.byteLength} bytes`);
 
+      console.log('[TSS-WASM] Instantiating WebAssembly...');
       const result = await WebAssembly.instantiate(wasmBytes, go.importObject);
+      console.log('[TSS-WASM] WebAssembly instantiated');
 
       // Run Go WASM (non-blocking, returns immediately)
+      console.log('[TSS-WASM] Starting Go runtime...');
       go.run(result.instance);
+      console.log('[TSS-WASM] Go runtime started, waiting for functions...');
 
       // Wait for global functions to be registered
       await waitForGlobalFunction('tssStartDKG', 5000);
@@ -129,7 +142,26 @@ export async function startDKG(
 ): Promise<{ round1Msg: string }> {
   await initTSSWasm();
 
-  const result = tssStartDKG(sessionId, partyIndex, threshold, totalParties);
+  // Check that the function exists
+  if (typeof tssStartDKG !== 'function') {
+    throw new Error('tssStartDKG function not available - WASM may not be initialized');
+  }
+
+  console.log('[TSS-WASM] Calling tssStartDKG with:', { sessionId, partyIndex, threshold, totalParties });
+
+  let result: WASMResult;
+  try {
+    result = tssStartDKG(sessionId, partyIndex, threshold, totalParties);
+  } catch (e) {
+    console.error('[TSS-WASM] tssStartDKG threw exception:', e);
+    throw new Error(`DKG start threw exception: ${e}`);
+  }
+
+  console.log('[TSS-WASM] tssStartDKG returned:', result);
+
+  if (!result) {
+    throw new Error('tssStartDKG returned undefined - Go WASM may have panicked');
+  }
 
   if (!result.success) {
     throw new Error(result.error || 'DKG start failed');
@@ -293,8 +325,10 @@ function waitForGlobalFunction(name: string, timeoutMs: number): Promise<void> {
 
     const check = () => {
       if (typeof (window as any)[name] === 'function') {
+        console.log(`[TSS-WASM] Function ${name} is now available`);
         resolve();
       } else if (Date.now() - start > timeoutMs) {
+        console.error(`[TSS-WASM] Timeout waiting for ${name} after ${timeoutMs}ms`);
         reject(new Error(`Timeout waiting for ${name}`));
       } else {
         setTimeout(check, 50);

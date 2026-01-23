@@ -131,22 +131,25 @@ class WalletService:
         correlation_id: str,
         idempotency_key: Optional[str] = None,
     ) -> Wallet:
-        """Create wallet using MPC (tECDSA DKG)."""
-        if not self._mpc_coordinator:
-            raise ValueError("MPC Coordinator not configured")
-        
-        # Get MPC parameters
-        threshold_t = wallet_data.mpc_threshold_t or 2
-        total_n = wallet_data.mpc_total_n or 3
-        
+        """
+        Create wallet record for MPC (tECDSA DKG).
+
+        This only creates the wallet in PENDING_KEYGEN status.
+        The actual DKG happens via WebSocket between browser WASM and MPC Signer.
+        Call finalize_mpc_wallet() after DKG completes.
+        """
+        # Get MPC parameters - for 2-of-2 with browser + bank signer
+        threshold_t = wallet_data.mpc_threshold_t or 1  # t=1 means 2-of-2
+        total_n = wallet_data.mpc_total_n or 2  # 2 parties: browser + bank
+
         # Validate threshold
-        if threshold_t > total_n:
-            raise ValueError(f"Threshold t={threshold_t} cannot exceed n={total_n}")
-        
+        if threshold_t >= total_n:
+            raise ValueError(f"Threshold t={threshold_t} must be less than n={total_n}")
+
         # Create wallet record in PENDING_KEYGEN state
         wallet = Wallet(
             id=str(uuid4()),
-            address=None,  # Will be set after DKG
+            address=None,  # Will be set after DKG via WebSocket
             wallet_type=wallet_data.wallet_type,
             subject_id=wallet_data.subject_id,
             tags=wallet_data.tags or {},
@@ -158,77 +161,133 @@ class WalletService:
             mpc_total_n=total_n,
             idempotency_key=idempotency_key
         )
-        
+
         self.db.add(wallet)
         await self.db.flush()
-        
-        try:
-            # Perform DKG via MPC Coordinator
-            keyset = await self._mpc_coordinator.create_keyset(
-                wallet_id=wallet.id,
-                threshold_t=threshold_t,
-                total_n=total_n,
-                cluster_id="default",
-                correlation_id=correlation_id,
-                actor_id=created_by,
-            )
-            
-            # Update wallet with keygen results
-            wallet.address = keyset.address.lower()
-            wallet.key_ref = keyset.key_ref
-            wallet.mpc_keyset_id = keyset.id
-            wallet.status = WalletStatus.ACTIVE
-            
-            # Store MPC metadata in tags
-            wallet.tags = wallet.tags or {}
-            wallet.tags["mpc_keyset_id"] = keyset.id
-            wallet.tags["mpc_threshold"] = f"{threshold_t}-of-{total_n}"
-            
-            await self.db.flush()
 
-            # Create OWNER role for the creator
-            owner_role = WalletRole(
-                id=str(uuid4()),
-                wallet_id=wallet.id,
-                user_id=created_by,
-                role=WalletRoleType.OWNER,
-                created_by=created_by,
-            )
-            self.db.add(owner_role)
-            await self.db.flush()
+        # Create OWNER role for the creator
+        owner_role = WalletRole(
+            id=str(uuid4()),
+            wallet_id=wallet.id,
+            user_id=created_by,
+            role=WalletRoleType.OWNER,
+            created_by=created_by,
+        )
+        self.db.add(owner_role)
+        await self.db.flush()
 
-            await self.db.refresh(wallet, ["roles"])
+        await self.db.refresh(wallet, ["roles"])
 
-            # Log audit event
-            await self.audit.log_event(
-                event_type=AuditEventType.WALLET_CREATED,
-                correlation_id=correlation_id,
-                actor_id=created_by,
-                entity_type="WALLET",
-                entity_id=wallet.id,
-                payload={
-                    "address": wallet.address,
-                    "wallet_type": wallet.wallet_type.value,
-                    "subject_id": wallet.subject_id,
-                    "risk_profile": wallet.risk_profile.value,
-                    "custody_backend": CustodyBackend.MPC_TECDSA.value,
-                    "mpc_keyset_id": keyset.id,
-                    "mpc_threshold": f"{threshold_t}-of-{total_n}",
-                }
-            )
+        # Log audit event for wallet creation (pending keygen)
+        await self.audit.log_event(
+            event_type=AuditEventType.WALLET_CREATED,
+            correlation_id=correlation_id,
+            actor_id=created_by,
+            entity_type="WALLET",
+            entity_id=wallet.id,
+            payload={
+                "wallet_type": wallet.wallet_type.value,
+                "subject_id": wallet.subject_id,
+                "risk_profile": wallet.risk_profile.value,
+                "custody_backend": CustodyBackend.MPC_TECDSA.value,
+                "status": "PENDING_KEYGEN",
+                "mpc_threshold": f"{threshold_t+1}-of-{total_n}",  # Display as t+1 of n
+            }
+        )
 
-            logger.info(f"Created MPC_TECDSA wallet: {wallet.id} with address {wallet.address}")
-            return wallet
-            
-        except Exception as e:
-            # Mark wallet as failed
-            wallet.status = WalletStatus.SUSPENDED
-            wallet.tags = wallet.tags or {}
-            wallet.tags["keygen_error"] = str(e)
-            await self.db.flush()
-            
-            logger.error(f"MPC keygen failed for wallet {wallet.id}: {e}")
-            raise
+        logger.info(f"Created MPC_TECDSA wallet (pending keygen): {wallet.id}")
+        return wallet
+
+    async def finalize_mpc_wallet(
+        self,
+        wallet_id: str,
+        keyset_id: str,
+        address: str,
+        public_key: str,
+        public_key_compressed: str,
+        correlation_id: str,
+        actor_id: str,
+    ) -> Wallet:
+        """
+        Finalize MPC wallet after DKG completes via WebSocket.
+
+        Called by the WebSocket handler when DKG between browser and MPC Signer succeeds.
+        """
+        from app.models.mpc import MPCKeyset, MPCKeysetStatus, MPCSession, MPCSessionType, MPCSessionStatus
+        from datetime import datetime
+
+        # Get wallet
+        result = await self.db.execute(
+            select(Wallet).where(Wallet.id == wallet_id)
+        )
+        wallet = result.scalar_one_or_none()
+        if not wallet:
+            raise ValueError(f"Wallet {wallet_id} not found")
+
+        if wallet.status != WalletStatus.PENDING_KEYGEN:
+            raise ValueError(f"Wallet {wallet_id} is not pending keygen (status: {wallet.status})")
+
+        # Create keyset record
+        keyset = MPCKeyset(
+            id=keyset_id,
+            wallet_id=wallet_id,
+            threshold_t=wallet.mpc_threshold_t,
+            total_n=wallet.mpc_total_n,
+            public_key=public_key,
+            public_key_compressed=public_key_compressed,
+            address=address,
+            status=MPCKeysetStatus.ACTIVE,
+            cluster_id="default",
+            key_ref=f"mpc-tecdsa://default/{keyset_id}",
+            participant_nodes={"nodes": ["browser-user", "bank-signer"]},
+            activated_at=datetime.utcnow(),
+        )
+        self.db.add(keyset)
+
+        # Create DKG session record
+        session = MPCSession(
+            id=str(uuid4()),
+            session_type=MPCSessionType.DKG,
+            keyset_id=keyset_id,
+            status=MPCSessionStatus.COMPLETED,
+            participant_nodes={"nodes": ["browser-user", "bank-signer"]},
+            current_round=3,
+            total_rounds=3,
+            quorum_reached=True,
+            started_at=datetime.utcnow(),
+            ended_at=datetime.utcnow(),
+        )
+        self.db.add(session)
+
+        # Update wallet
+        wallet.address = address.lower()
+        wallet.key_ref = keyset.key_ref
+        wallet.mpc_keyset_id = keyset_id
+        wallet.status = WalletStatus.ACTIVE
+        wallet.tags = wallet.tags or {}
+        wallet.tags["mpc_keyset_id"] = keyset_id
+        wallet.tags["mpc_threshold"] = f"{wallet.mpc_threshold_t+1}-of-{wallet.mpc_total_n}"
+
+        await self.db.flush()
+        await self.db.refresh(wallet, ["roles"])
+
+        # Log audit event
+        await self.audit.log_event(
+            event_type=AuditEventType.MPC_KEYGEN_COMPLETED,
+            correlation_id=correlation_id,
+            actor_id=actor_id,
+            entity_type="WALLET",
+            entity_id=wallet.id,
+            payload={
+                "address": wallet.address,
+                "keyset_id": keyset_id,
+                "public_key_hash": public_key[:16] + "...",
+                "mpc_threshold": f"{wallet.mpc_threshold_t+1}-of-{wallet.mpc_total_n}",
+            }
+        )
+
+        logger.info(f"Finalized MPC_TECDSA wallet: {wallet.id} with address {wallet.address}")
+        return wallet
     
     async def create_mpc_wallet(
         self,

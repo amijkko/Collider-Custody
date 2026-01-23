@@ -47,11 +47,12 @@ logger.info(f"settings.database_url: {db_url_setting}")
 logger.info(f"settings.database_url_sync: {db_sync_setting}")
 
 # Validate that we have a valid database URL
-if not settings.database_url_sync or settings.database_url_sync.startswith("postgresql://collider:collider_dev_pass@localhost"):
-    error_msg = f"ERROR: Invalid DATABASE_URL_SYNC! Got: {db_sync_setting}. DATABASE_URL env var: {db_url_env[:50] if db_url_env != 'NOT SET' else 'NOT SET'}"
+# Allow localhost for local development
+if not settings.database_url_sync:
+    error_msg = f"ERROR: DATABASE_URL_SYNC is empty!"
     print(f"[Alembic] {error_msg}", file=sys.stderr, flush=True)
     logger.error(error_msg)
-    raise ValueError(f"Invalid database configuration. DATABASE_URL must be set in Railway environment variables. Current value: {db_sync_setting}")
+    raise ValueError(f"Invalid database configuration. DATABASE_URL_SYNC must be set.")
 
 config.set_main_option("sqlalchemy.url", settings.database_url_sync)
 

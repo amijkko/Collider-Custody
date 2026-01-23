@@ -73,6 +73,7 @@ message DKGRoundRequest {
 message PartyMessage {
   int32 from_party = 1;
   bytes payload = 2;
+  bool is_broadcast = 3;  // True if broadcast message, false if point-to-point
 }
 
 message DKGRoundResponse {
