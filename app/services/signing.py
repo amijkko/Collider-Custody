@@ -80,7 +80,7 @@ class SigningService:
         tx_dict = {
             "nonce": nonce,
             "to": Web3.to_checksum_address(tx_request.to_address),
-            "value": Web3.to_wei(tx_request.amount, "ether") if tx_request.asset == "ETH" else 0,
+            "value": int(tx_request.amount) if tx_request.asset == "ETH" else 0,  # amount is already in wei
             "gas": gas_limit,
             "chainId": chain_id,
         }
