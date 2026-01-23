@@ -25,6 +25,9 @@ from app.services.mpc_grpc_client import (
 )
 from app.api.deps import get_current_user_ws
 from app.models.user import User
+from app.database import async_session_maker
+from app.services.wallet import WalletService
+from app.services.audit import AuditService
 
 logger = logging.getLogger(__name__)
 
@@ -369,15 +372,37 @@ async def handle_dkg_round(
         return
     
     round_num = data.get("round", session.current_round + 1)
-    user_message = data.get("user_message")
-    
-    if user_message:
-        user_message = bytes.fromhex(user_message)
-    
+    user_message_raw = data.get("user_message")
+
+    # Parse user message
+    # WASM returns JSON array with metadata: [{ToPartyIndex, IsBroadcast, Payload}, ...]
+    # We pass this through to bank signer which will parse the JSON
+    incoming_messages = []
+    if user_message_raw:
+        # Check if it's the new JSON format with metadata (starts with '[{')
+        if user_message_raw.startswith('[{') or user_message_raw.startswith('[{"'):
+            # New format: JSON array with metadata
+            # Pass the entire JSON as bytes - bank signer will parse it
+            logger.info(f"DKG round {round_num}: received JSON message from user (new format)")
+            incoming_messages.append((1, user_message_raw.encode('utf-8')))
+        elif user_message_raw.startswith('['):
+            # Old format: JSON array of hex strings
+            try:
+                message_list = json.loads(user_message_raw)
+                logger.info(f"DKG round {round_num}: received {len(message_list)} hex messages from user (old format)")
+                for msg_hex in message_list:
+                    if msg_hex:
+                        incoming_messages.append((1, bytes.fromhex(msg_hex)))
+            except json.JSONDecodeError:
+                # Not valid JSON, treat as single hex string
+                incoming_messages = [(1, bytes.fromhex(user_message_raw))]
+        else:
+            # Single hex string
+            incoming_messages = [(1, bytes.fromhex(user_message_raw))]
+
     try:
         # Process round on bank signer
         # User is party 1, so we include the party index
-        incoming_messages = [(1, user_message)] if user_message else []
         success, out_msg, result, is_final, error = await mpc_client.process_dkg_round(
             session_id=session_id,
             round_num=round_num,
@@ -401,10 +426,45 @@ async def handle_dkg_round(
             session.result = {
                 "keyset_id": result.keyset_id,
                 "ethereum_address": result.ethereum_address,
-                "public_key": result.public_key.hex(),
+                "public_key": result.public_key.hex() if isinstance(result.public_key, bytes) else result.public_key,
             }
             session.keyset_id = result.keyset_id
-            
+
+            # Save keyset and finalize wallet in database
+            try:
+                async with async_session_maker() as db:
+                    audit = AuditService(db)
+                    wallet_service = WalletService(db, audit)
+
+                    public_key = result.public_key.hex() if isinstance(result.public_key, bytes) else result.public_key
+                    public_key_full = result.public_key_full.hex() if isinstance(result.public_key_full, bytes) else result.public_key_full
+
+                    # Derive compressed public key (first byte + x coordinate)
+                    # Full key is 0x04 + x (32 bytes) + y (32 bytes) = 65 bytes
+                    public_key_compressed = public_key_full  # Use full key, compression done in finalize
+
+                    await wallet_service.finalize_mpc_wallet(
+                        wallet_id=session.wallet_id,
+                        keyset_id=result.keyset_id,
+                        address=result.ethereum_address,
+                        public_key=public_key_full,
+                        public_key_compressed=public_key,
+                        correlation_id=session_id,
+                        actor_id=user_id,
+                    )
+                    await db.commit()
+
+                logger.info(f"DKG complete and saved for session {session_id}: {result.ethereum_address}")
+            except Exception as e:
+                logger.exception(f"Failed to save DKG result: {e}")
+                await websocket.send_json({
+                    "type": MessageType.DKG_ERROR,
+                    "session_id": session_id,
+                    "data": {"error": f"Failed to save keyset: {str(e)}"}
+                })
+                manager.cleanup_session(session_id)
+                return
+
             await websocket.send_json({
                 "type": MessageType.DKG_COMPLETE,
                 "session_id": session_id,
@@ -415,11 +475,8 @@ async def handle_dkg_round(
                     "public_key_full": result.public_key_full.hex() if isinstance(result.public_key_full, bytes) else result.public_key_full,
                 }
             })
-            
-            logger.info(f"DKG complete for session {session_id}: {result.ethereum_address}")
-            
-            # Don't cleanup immediately - let coordinator update DB
-            # manager.cleanup_session(session_id)
+
+            manager.cleanup_session(session_id)
         else:
             # Send next round message
             await websocket.send_json({

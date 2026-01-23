@@ -11,6 +11,8 @@ from app.models.mpc import (
     SigningPermit,
     MPCErrorCategory,
 )
+from app.models.group import Group, GroupMember, GroupAddressBook, GroupPolicy, AddressKind
+from app.models.policy_set import PolicySet, PolicyRule, PolicyDecision, RETAIL_GROUP_ID, RETAIL_POLICY_SET_ID
 
 __all__ = [
     "User",
@@ -44,4 +46,16 @@ __all__ = [
     "MPCNodeStatus",
     "SigningPermit",
     "MPCErrorCategory",
+    # Group models
+    "Group",
+    "GroupMember",
+    "GroupAddressBook",
+    "GroupPolicy",
+    "AddressKind",
+    # Policy set models
+    "PolicySet",
+    "PolicyRule",
+    "PolicyDecision",
+    "RETAIL_GROUP_ID",
+    "RETAIL_POLICY_SET_ID",
 ]

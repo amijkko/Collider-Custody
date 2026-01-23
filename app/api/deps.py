@@ -148,6 +148,16 @@ def require_roles(*roles: UserRole):
     return role_checker
 
 
+async def require_admin(user: User = Depends(get_current_user)) -> User:
+    """Require user to be an admin."""
+    if user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required"
+        )
+    return user
+
+
 async def require_wallet_role(
     wallet_id: str,
     required_roles: List[WalletRoleType],

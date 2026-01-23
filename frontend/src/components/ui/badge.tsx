@@ -37,8 +37,8 @@ function Badge({ className, variant, ...props }: BadgeProps) {
 function StatusBadge({ status, className }: { status: string; className?: string }) {
   const getVariant = (status: string): VariantProps<typeof badgeVariants>['variant'] => {
     const s = status.toLowerCase();
-    if (s.includes('pending') || s.includes('waiting') || s.includes('submitted')) return 'warning';
-    if (s.includes('approved') || s.includes('completed') || s.includes('finalized') || s.includes('active') || s.includes('credited')) return 'success';
+    if (s.includes('pending') || s.includes('waiting') || s.includes('submitted') || s.includes('eval')) return 'warning';
+    if (s.includes('approved') || s.includes('completed') || s.includes('finalized') || s.includes('active') || s.includes('credited') || s.includes('skipped') || s.includes('confirmed')) return 'success';
     if (s.includes('rejected') || s.includes('failed') || s.includes('blocked') || s.includes('expired')) return 'destructive';
     if (s.includes('progress') || s.includes('confirming') || s.includes('broadcast') || s.includes('signed')) return 'primary';
     return 'default';

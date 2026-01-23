@@ -1,4 +1,12 @@
-"""Transaction Orchestrator - state machine for transaction workflow."""
+"""Transaction Orchestrator - state machine for transaction workflow.
+
+Flow v2 (tiered policies): Policy → KYT (conditional) → Approval (conditional) → Sign
+
+The policy engine evaluates first and determines:
+- Whether KYT check is required
+- Whether approval is required
+- Number of approvals needed
+"""
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional, Tuple, TYPE_CHECKING
@@ -17,6 +25,9 @@ from app.models.mpc import SigningPermit
 from app.services.audit import AuditService
 from app.services.kyt import KYTService, KYTResult
 from app.services.policy import PolicyService
+from app.services.policy_v2 import PolicyEngineV2, PolicyEvalResult
+from app.services.group import GroupService
+from app.services.address_book import AddressBookService
 from app.services.signing import SigningService
 from app.services.ethereum import EthereumService
 from app.schemas.tx_request import TxRequestCreate
@@ -29,12 +40,17 @@ logger = logging.getLogger(__name__)
 
 class TxOrchestrator:
     """
-    Orchestrates the complete transaction lifecycle:
-    SUBMITTED -> KYT -> POLICY -> APPROVALS -> SIGN -> BROADCAST -> CONFIRM -> FINALIZE
-    
+    Orchestrates the complete transaction lifecycle (v2 flow):
+    SUBMITTED -> POLICY -> KYT (conditional) -> APPROVALS (conditional) -> SIGN -> BROADCAST -> CONFIRM -> FINALIZE
+
+    Policy evaluation happens first and determines:
+    - Whether to BLOCK immediately (denylist)
+    - Whether KYT check is required
+    - Whether approval is required and how many
+
     Supports both DEV_SIGNER and MPC_TECDSA custody backends.
     """
-    
+
     def __init__(
         self,
         db: AsyncSession,
@@ -48,10 +64,15 @@ class TxOrchestrator:
         self.db = db
         self.audit = audit
         self.kyt = kyt
-        self.policy = policy
+        self.policy = policy  # Legacy policy service (fallback)
         self.signing = signing
         self.ethereum = ethereum
         self.mpc_coordinator = mpc_coordinator
+
+        # Initialize v2 policy engine components
+        self.group_service = GroupService(db, audit)
+        self.address_book = AddressBookService(db, audit)
+        self.policy_v2 = PolicyEngineV2(db, audit, self.group_service, self.address_book)
     
     async def create_tx_request(
         self,
@@ -129,10 +150,10 @@ class TxOrchestrator:
                 "amount": str(tx.amount)
             }
         )
-        
-        # Start async processing
-        await self._process_kyt(tx, wallet, correlation_id, created_by)
-        
+
+        # Start async processing (v2 flow: Policy first)
+        await self._process_policy_v2(tx, wallet, created_by, correlation_id)
+
         return tx
     
     async def _transition_status(
@@ -173,7 +194,168 @@ class TxOrchestrator:
         
         await self.db.flush()
         return True
-    
+
+    async def _process_policy_v2(
+        self,
+        tx: TxRequest,
+        wallet: Wallet,
+        actor_id: str,
+        correlation_id: str,
+    ):
+        """
+        Process policy evaluation using PolicyEngineV2 (tiered rules).
+
+        This is the FIRST step in v2 flow. Policy determines:
+        - BLOCK: Denylist or policy violation
+        - ALLOW with kyt_required: Proceed to KYT check
+        - ALLOW without kyt_required: Skip KYT
+        - approval_required: Whether approvals are needed after KYT
+        """
+        await self._transition_status(tx, TxStatus.POLICY_EVAL_PENDING, correlation_id, actor_id)
+
+        # Evaluate using v2 engine
+        result: PolicyEvalResult = await self.policy_v2.evaluate(
+            user_id=actor_id,
+            to_address=tx.to_address,
+            amount=tx.amount,
+            asset=tx.asset,
+            wallet=wallet,
+            tx_request_id=tx.id,
+            correlation_id=correlation_id,
+        )
+
+        # Store full policy result for explainability
+        tx.policy_result = {
+            "decision": result.decision,
+            "allowed": result.allowed,
+            "matched_rules": result.matched_rules,
+            "reasons": result.reasons,
+            "kyt_required": result.kyt_required,
+            "approval_required": result.approval_required,
+            "approval_count": result.approval_count,
+            "policy_version": result.policy_version,
+            "policy_snapshot_hash": result.policy_snapshot_hash,
+            "group_id": result.group_id,
+            "group_name": result.group_name,
+            "address_status": result.address_status,
+            "address_label": result.address_label,
+            "evaluated_at": result.evaluated_at.isoformat(),
+        }
+
+        # Store control requirements on tx
+        tx.requires_approval = result.approval_required
+        tx.required_approvals = result.approval_count
+
+        if not result.allowed:
+            # Policy blocked (denylist, unknown address, no group)
+            await self._transition_status(
+                tx, TxStatus.POLICY_BLOCKED, correlation_id, actor_id,
+                {
+                    "blocked_by": result.matched_rules,
+                    "reason": result.reasons[0] if result.reasons else "Policy blocked",
+                    "address_status": result.address_status,
+                }
+            )
+            return
+
+        # Policy allowed - check if KYT is required
+        if result.kyt_required:
+            # Proceed to KYT evaluation
+            await self._process_kyt_v2(tx, wallet, result, correlation_id, actor_id)
+        else:
+            # Skip KYT - log and proceed to approval check
+            await self._transition_status(tx, TxStatus.KYT_SKIPPED, correlation_id, actor_id)
+
+            await self.audit.log_event(
+                event_type=AuditEventType.KYT_SKIPPED,
+                correlation_id=correlation_id,
+                actor_id=actor_id,
+                actor_type="SYSTEM",
+                entity_type="TX_REQUEST",
+                entity_id=tx.id,
+                payload={
+                    "reason": "Policy rule does not require KYT",
+                    "matched_rules": result.matched_rules,
+                    "policy_version": result.policy_version,
+                }
+            )
+
+            # Check if approval is required
+            await self._process_approval_gate(tx, wallet, result, correlation_id, actor_id)
+
+    async def _process_kyt_v2(
+        self,
+        tx: TxRequest,
+        wallet: Wallet,
+        policy_result: PolicyEvalResult,
+        correlation_id: str,
+        actor_id: Optional[str] = None
+    ):
+        """Process KYT evaluation (v2 flow - after policy)."""
+        await self._transition_status(tx, TxStatus.KYT_PENDING, correlation_id, actor_id)
+
+        # Evaluate KYT
+        result, case = await self.kyt.evaluate_outbound(
+            tx.to_address,
+            tx.id,
+            correlation_id,
+            actor_id
+        )
+
+        tx.kyt_result = result
+        if case:
+            tx.kyt_case_id = case.id
+
+        if result == KYTResult.BLOCK:
+            await self._transition_status(tx, TxStatus.KYT_BLOCKED, correlation_id, actor_id)
+            return
+
+        if result == KYTResult.REVIEW:
+            await self._transition_status(tx, TxStatus.KYT_REVIEW, correlation_id, actor_id)
+            return  # Wait for manual resolution
+
+        # KYT passed, check approval requirement
+        await self._process_approval_gate(tx, wallet, policy_result, correlation_id, actor_id)
+
+    async def _process_approval_gate(
+        self,
+        tx: TxRequest,
+        wallet: Wallet,
+        policy_result: PolicyEvalResult,
+        correlation_id: str,
+        actor_id: Optional[str] = None
+    ):
+        """
+        Check if approval is required based on policy result.
+
+        If approval required: transition to APPROVAL_PENDING
+        If not required: skip to signing
+        """
+        if policy_result.approval_required and policy_result.approval_count > 0:
+            # Approval required
+            await self._transition_status(tx, TxStatus.APPROVAL_PENDING, correlation_id, actor_id)
+            return  # Wait for approvals
+
+        # No approval required - fast track to signing
+        await self._transition_status(tx, TxStatus.APPROVAL_SKIPPED, correlation_id, actor_id)
+
+        await self.audit.log_event(
+            event_type=AuditEventType.APPROVALS_SKIPPED,
+            correlation_id=correlation_id,
+            actor_id=actor_id,
+            actor_type="SYSTEM",
+            entity_type="TX_REQUEST",
+            entity_id=tx.id,
+            payload={
+                "reason": "Policy rule does not require approval",
+                "matched_rules": policy_result.matched_rules,
+                "policy_version": policy_result.policy_version,
+            }
+        )
+
+        # Proceed to signing
+        await self._process_signing(tx, wallet, correlation_id, actor_id)
+
     async def _process_kyt(
         self,
         tx: TxRequest,
@@ -681,33 +863,59 @@ class TxOrchestrator:
         tx_request_id: str,
         correlation_id: str
     ) -> TxRequest:
-        """Resume processing after KYT case resolution."""
+        """
+        Resume processing after KYT case resolution (v2 flow).
+
+        In v2, policy was already evaluated. After KYT resolution:
+        - If BLOCK: transition to KYT_BLOCKED
+        - If ALLOW: check approval requirement from stored policy result
+        """
         tx_result = await self.db.execute(
             select(TxRequest).where(TxRequest.id == tx_request_id)
         )
         tx = tx_result.scalar_one_or_none()
         if not tx:
             raise ValueError(f"Transaction {tx_request_id} not found")
-        
+
         if tx.status != TxStatus.KYT_REVIEW:
             raise ValueError(f"Transaction is not in KYT_REVIEW status")
-        
+
         # Check case resolution
         case = await self.kyt.get_case(tx.kyt_case_id)
         if not case or case.status == "PENDING":
             raise ValueError("KYT case is not resolved")
-        
+
         if case.status == "RESOLVED_BLOCK":
             await self._transition_status(tx, TxStatus.KYT_BLOCKED, correlation_id)
             return tx
-        
-        # Case resolved with ALLOW, proceed to policy
+
+        # Case resolved with ALLOW - check approval requirement from stored policy
         wallet_result = await self.db.execute(
             select(Wallet).where(Wallet.id == tx.wallet_id)
         )
         wallet = wallet_result.scalar_one()
-        await self._process_policy(tx, wallet, correlation_id)
-        
+
+        # Reconstruct policy result from stored data
+        policy_data = tx.policy_result or {}
+        policy_result = PolicyEvalResult(
+            decision=policy_data.get("decision", "ALLOW"),
+            allowed=policy_data.get("allowed", True),
+            matched_rules=policy_data.get("matched_rules", []),
+            reasons=policy_data.get("reasons", []),
+            kyt_required=policy_data.get("kyt_required", True),
+            approval_required=policy_data.get("approval_required", False),
+            approval_count=policy_data.get("approval_count", 0),
+            policy_version=policy_data.get("policy_version", ""),
+            policy_snapshot_hash=policy_data.get("policy_snapshot_hash", ""),
+            group_id=policy_data.get("group_id"),
+            group_name=policy_data.get("group_name"),
+            address_status=policy_data.get("address_status", "unknown"),
+            address_label=policy_data.get("address_label"),
+        )
+
+        # Proceed to approval gate
+        await self._process_approval_gate(tx, wallet, policy_result, correlation_id)
+
         return tx
     
     async def get_tx_request(self, tx_request_id: str) -> Optional[TxRequest]:

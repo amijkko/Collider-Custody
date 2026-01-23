@@ -20,14 +20,18 @@ async def register_user(
     db: AsyncSession = Depends(get_db),
     correlation_id: str = Depends(get_correlation_id)
 ):
-    """Register a new user."""
+    """
+    Register a new user.
+
+    New users are automatically enrolled in the Retail group
+    with tiered policy enforcement.
+    """
     auth_service = AuthService(db)
-    audit_service = AuditService(db)
-    
+
     try:
-        user = await auth_service.create_user(user_data)
+        user = await auth_service.create_user(user_data, correlation_id=correlation_id)
         await db.commit()
-        
+
         return CorrelatedResponse(
             correlation_id=correlation_id,
             data=UserResponse.model_validate(user)

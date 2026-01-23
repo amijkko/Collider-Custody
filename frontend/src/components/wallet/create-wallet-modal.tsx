@@ -15,6 +15,7 @@ import { Input } from '@/components/ui/input';
 import { useToastHelpers } from '@/hooks/use-toast';
 import { walletsApi } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { createMPCClient } from '@/lib/mpc';
 
 interface CreateWalletModalProps {
   open: boolean;
@@ -64,38 +65,87 @@ export function CreateWalletModal({ open, onOpenChange, onSuccess }: CreateWalle
     setStep('keygen');
 
     try {
-      // Simulate keygen progress for demo
-      const progressInterval = setInterval(() => {
-        setKeygenProgress((prev) => Math.min(prev + 10, 90));
-      }, 300);
+      if (walletType === 'MPC_TECDSA') {
+        // Real MPC flow: Create wallet, then do DKG via WebSocket
 
-      // Create wallet via API
-      const response = walletType === 'MPC_TECDSA' 
-        ? await walletsApi.createMPC({
-            wallet_type: 'RETAIL',
-            subject_id: `user-wallet-${Date.now()}`,
-            mpc_threshold_t: 2,
-            mpc_total_n: 2, // 2-of-2 for demo (user + bank)
-          })
-        : await walletsApi.create({
-            wallet_type: 'RETAIL',
-            subject_id: `user-wallet-${Date.now()}`,
-            custody_backend: 'DEV_SIGNER',
-          });
+        // Step 1: Create wallet in PENDING_KEYGEN state
+        setKeygenProgress(10);
+        const response = await walletsApi.createMPC({
+          wallet_type: 'RETAIL',
+          subject_id: `user-wallet-${Date.now()}`,
+          mpc_threshold_t: 1, // t=1 means 2-of-2
+          mpc_total_n: 2,
+        });
+        const walletId = response.data.id;
+        setKeygenProgress(20);
 
-      clearInterval(progressInterval);
-      setKeygenProgress(100);
-      setCreatedWallet(response.data);
+        // Step 2: Connect to WebSocket and do real DKG
+        const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/v1/mpc/ws';
+        const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
 
-      // In real app: encrypt and store user share in IndexedDB
-      // await encryptAndStoreShare(userShare, password, response.data.id, response.data.mpc_keyset_id);
+        const mpcClient = createMPCClient({
+          wsUrl,
+          token: token || undefined,
+          onProgress: (message, round, total) => {
+            // Map DKG progress (rounds 1-3) to 30-90%
+            const progress = 30 + Math.round((round / total) * 60);
+            setKeygenProgress(progress);
+          },
+          onError: (err) => {
+            console.error('[MPC] Error:', err);
+          },
+        });
 
-      setTimeout(() => {
-        setStep('complete');
-        toast.success('Wallet created!', 'Your MPC wallet is ready');
-      }, 500);
+        await mpcClient.connect();
+        setKeygenProgress(25);
+
+        if (token) {
+          await mpcClient.authenticate();
+        }
+        setKeygenProgress(30);
+
+        // Step 3: Do DKG - this is where browser WASM and bank signer generate the key
+        const dkgResult = await mpcClient.startDKG(walletId, password);
+        setKeygenProgress(100);
+
+        mpcClient.disconnect();
+
+        // Step 4: Show success with the generated address
+        setCreatedWallet({
+          id: walletId,
+          address: dkgResult.ethereumAddress,
+          mpc_keyset_id: dkgResult.keysetId,
+        });
+
+        setTimeout(() => {
+          setStep('complete');
+          toast.success('Wallet created!', 'Your MPC wallet is ready');
+        }, 500);
+
+      } else {
+        // DEV_SIGNER flow: Simple wallet creation
+        const progressInterval = setInterval(() => {
+          setKeygenProgress((prev) => Math.min(prev + 10, 90));
+        }, 300);
+
+        const response = await walletsApi.create({
+          wallet_type: 'RETAIL',
+          subject_id: `user-wallet-${Date.now()}`,
+          custody_backend: 'DEV_SIGNER',
+        });
+
+        clearInterval(progressInterval);
+        setKeygenProgress(100);
+        setCreatedWallet(response.data);
+
+        setTimeout(() => {
+          setStep('complete');
+          toast.success('Wallet created!', 'Your wallet is ready');
+        }, 500);
+      }
 
     } catch (error) {
+      console.error('Failed to create wallet:', error);
       toast.error('Failed to create wallet', error instanceof Error ? error.message : 'Please try again');
       setStep('password');
     } finally {

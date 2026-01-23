@@ -22,6 +22,8 @@ from app.api import (
 )
 from app.api.deposits import router as deposits_router
 from app.api.mpc_websocket import router as mpc_ws_router
+from app.api.kyt import router as kyt_router
+from app.api.groups import router as groups_router
 from app.services.chain_listener import ChainListener
 from app.services.mpc_grpc_client import (
     initialize_mpc_signer_client,
@@ -98,10 +100,11 @@ This API provides enterprise-grade custody and transaction management for Ethere
 ### Features
 - **Wallet Registry**: Create and manage Ethereum wallets with role-based access
 - **Transaction Orchestrator**: State machine for transaction lifecycle
-- **KYT (Know Your Transaction)**: Screen transactions against blacklists/graylists
-- **Policy Engine**: Enforce limits, denylists, and approval requirements
-- **Approvals**: Segregation of Duties with multi-approval workflows
-- **Signing**: Dev mode signer (HSM/MPC interface ready)
+- **Groups & Policies**: User groups with tiered policy rules and address books
+- **KYT (Know Your Transaction)**: Conditional screening based on policy rules
+- **Policy Engine v2**: Tiered rules with explainability (matched rules, reasons)
+- **Approvals**: Conditional multi-approval workflows based on policy
+- **Signing**: Dev mode signer + MPC tECDSA support
 - **Chain Listener**: Monitor confirmations and inbound deposits
 - **Audit Log**: Tamper-evident hash-chain audit trail
 
@@ -177,6 +180,8 @@ app.include_router(cases_router)
 app.include_router(policies_router)
 app.include_router(audit_router)
 app.include_router(deposits_router)
+app.include_router(kyt_router)
+app.include_router(groups_router)
 app.include_router(mpc_ws_router, tags=["MPC WebSocket"])
 
 

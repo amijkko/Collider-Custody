@@ -58,6 +58,18 @@ class Settings(BaseSettings):
     mpc_signer_url: str = "localhost:50051"
     mpc_signer_enabled: bool = False  # Set to True when using real MPC
     mpc_permit_secret: str = "dev_permit_secret_minimum_32_characters_long"
+
+    # BitOK KYT Integration
+    bitok_enabled: bool = False  # Set to True to enable BitOK KYT
+    bitok_mock_mode: bool = False  # Mock mode for testing without real API
+    bitok_api_key_id: str = ""
+    bitok_api_secret: str = ""
+    bitok_base_url: str = "https://kyt-api.bitok.org"
+    bitok_timeout_seconds: int = 30
+    bitok_cache_ttl_hours: int = 24
+    bitok_poll_interval_ms: int = 2000
+    bitok_poll_timeout_ms: int = 120000
+    bitok_fallback_on_error: bool = True  # Pass transactions with "unchecked" flag when BitOK unavailable
     
     @property
     def kyt_blacklist_addresses(self) -> List[str]:

@@ -241,7 +241,7 @@ export class MPCClient {
         data: { wallet_id: walletId },
       });
 
-      // Timeout (DKG can take a while)
+      // Timeout (DKG can take a while - pre-params generation takes 10-30 sec)
       setTimeout(() => {
         if (this.dkgPromise) {
           this.dkgPromise.reject(new Error('DKG timeout'));
@@ -249,7 +249,7 @@ export class MPCClient {
           this.setStatus('authenticated');
           this.cleanupDKGSession();
         }
-      }, 120000); // 2 minutes
+      }, 300000); // 5 minutes
     });
   }
 
@@ -431,13 +431,73 @@ export class MPCClient {
 
       if (round === 1) {
         // Start DKG session in WASM
-        const result = await tssWasm.startDKG(
+        const startResult = await tssWasm.startDKG(
           this.currentSessionId!,
           this.partyIndex,
           this.threshold,
           this.totalParties
         );
-        userMessage = result.round1Msg;
+
+        // Collect all message objects to send
+        // Each message is an object like {ToPartyIndex, IsBroadcast, Payload}
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const messagesToSend: any[] = [];
+
+        // Parse round1Msg if it's a JSON array string
+        if (startResult.round1Msg) {
+          if (startResult.round1Msg.startsWith('[')) {
+            try {
+              const msgs = JSON.parse(startResult.round1Msg);
+              messagesToSend.push(...msgs);
+              console.log(`[MPC] Parsed ${msgs.length} messages from round1Msg`);
+            } catch {
+              // If not valid JSON array, just keep as-is (should not happen)
+              console.warn('[MPC] round1Msg is not valid JSON array');
+            }
+          }
+        }
+
+        // Also process the incoming bank message from round 1
+        if (bankMessage) {
+          console.log('[MPC] Processing bank round 1 message after startDKG');
+          const incomingMessages: tssWasm.IncomingMessage[] = [
+            { from_party: 0, payload: bankMessage },
+          ];
+          const processResult = await tssWasm.processDKGRound(
+            this.currentSessionId!,
+            1,
+            incomingMessages
+          );
+
+          // If there are outgoing messages from processing, add them
+          if (processResult.outgoingMsg) {
+            console.log('[MPC] Got additional outgoing message from processing bank round 1, size:', processResult.outgoingMsg.length);
+            // Parse outgoingMsg JSON array and add objects
+            if (processResult.outgoingMsg.startsWith('[')) {
+              try {
+                const msgArray = JSON.parse(processResult.outgoingMsg);
+                messagesToSend.push(...msgArray);
+                console.log(`[MPC] Unpacked ${msgArray.length} messages from processResult`);
+              } catch {
+                console.warn('[MPC] Failed to parse outgoingMsg as JSON array');
+              }
+            }
+          }
+
+          // Check if DKG completed after processing bank's round 1
+          if (processResult.isFinal && processResult.result) {
+            this.dkgSaveData = processResult.result.save_data;
+            console.log('[MPC] Local DKG completed after processing bank round 1');
+          }
+        }
+
+        // Always send as JSON array of message objects
+        if (messagesToSend.length > 0) {
+          userMessage = JSON.stringify(messagesToSend);
+          console.log(`[MPC] Sending ${messagesToSend.length} messages as JSON array`);
+        } else {
+          userMessage = '';
+        }
       } else {
         // Process incoming bank message
         const incomingMessages: tssWasm.IncomingMessage[] = bankMessage
@@ -456,6 +516,7 @@ export class MPCClient {
           console.log('[MPC] Local DKG complete, waiting for server confirmation');
         }
 
+        // outgoingMsg can be single hex string or JSON array of hex strings
         userMessage = result.outgoingMsg;
       }
 
