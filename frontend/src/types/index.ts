@@ -94,20 +94,23 @@ export interface WithdrawRequest {
   gas_price: number | null;
   confirmations: number;
   required_approvals: number;
+  requires_approval: boolean;
+  kyt_result: KYTResult | null;
+  policy_result: TxPolicyResult | null;
   approvals: Approval[];
   created_at: string;
   updated_at: string;
   created_by: string;
 }
 
-export type WithdrawStatus = 
+export type WithdrawStatus =
   | 'SUBMITTED'
-  | 'KYT_PENDING' | 'KYT_BLOCKED' | 'KYT_REVIEW'
-  | 'POLICY_PENDING' | 'POLICY_BLOCKED'
-  | 'APPROVAL_PENDING'
+  | 'POLICY_EVAL_PENDING' | 'POLICY_BLOCKED'
+  | 'KYT_PENDING' | 'KYT_SKIPPED' | 'KYT_BLOCKED' | 'KYT_REVIEW'
+  | 'APPROVAL_PENDING' | 'APPROVAL_SKIPPED'
   | 'SIGN_PENDING' | 'SIGNED' | 'FAILED_SIGN'
   | 'BROADCAST_PENDING' | 'BROADCASTED' | 'FAILED_BROADCAST'
-  | 'CONFIRMING' | 'FINALIZED' | 'FAILED'
+  | 'CONFIRMING' | 'CONFIRMED' | 'FINALIZED' | 'FAILED'
   | 'REJECTED';
 
 export interface Approval {
@@ -224,5 +227,99 @@ export interface EncryptedShare {
     ciphertext_b64: string;
   };
   createdAt: string;
+}
+
+// Group types
+export interface Group {
+  id: string;
+  name: string;
+  description: string | null;
+  is_default: boolean;
+  member_count: number;
+  allowlist_count: number;
+  denylist_count: number;
+  policy_set_id: string | null;
+  policy_set_name: string | null;
+  created_at: string;
+}
+
+export type AddressKind = 'ALLOW' | 'DENY';
+
+export interface AddressBookEntry {
+  id: string;
+  address: string;
+  kind: AddressKind;
+  label: string | null;
+  created_at: string;
+}
+
+export interface AddressBookList {
+  entries: AddressBookEntry[];
+  total: number;
+  allowlist_count: number;
+  denylist_count: number;
+}
+
+export interface AddressCheckResult {
+  address: string;
+  status: 'allowlist' | 'denylist' | 'unknown';
+  label: string | null;
+}
+
+// Policy types
+export type PolicyDecision = 'ALLOW' | 'BLOCK' | 'CONTINUE';
+
+export interface PolicyRule {
+  id: string;
+  rule_id: string;
+  priority: number;
+  conditions: Record<string, any>;
+  decision: PolicyDecision;
+  kyt_required: boolean;
+  approval_required: boolean;
+  approval_count: number;
+  description: string | null;
+}
+
+export interface PolicySet {
+  id: string;
+  name: string;
+  version: number;
+  description: string | null;
+  is_active: boolean;
+  snapshot_hash: string | null;
+  rules: PolicyRule[];
+  created_at: string;
+}
+
+export interface PolicyEvalPreview {
+  decision: string;
+  allowed: boolean;
+  matched_rules: string[];
+  reasons: string[];
+  kyt_required: boolean;
+  approval_required: boolean;
+  approval_count: number;
+  address_status: 'allowlist' | 'denylist' | 'unknown';
+  address_label: string | null;
+  policy_version: string;
+}
+
+// Transaction policy result (stored on tx)
+export interface TxPolicyResult {
+  decision: string;
+  allowed: boolean;
+  matched_rules: string[];
+  reasons: string[];
+  kyt_required: boolean;
+  approval_required: boolean;
+  approval_count: number;
+  policy_version: string;
+  policy_snapshot_hash: string;
+  group_id: string | null;
+  group_name: string | null;
+  address_status: string;
+  address_label: string | null;
+  evaluated_at: string;
 }
 

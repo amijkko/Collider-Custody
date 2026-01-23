@@ -34,9 +34,9 @@ const clientNavItems: NavItem[] = [
 
 const adminNavItems: NavItem[] = [
   { title: 'Dashboard', href: '/admin', icon: LayoutDashboard },
+  { title: 'Groups', href: '/admin/groups', icon: Users },
   { title: 'Deposits', href: '/admin/deposits', icon: ArrowDownLeft },
   { title: 'Withdrawals', href: '/admin/withdrawals', icon: ArrowUpRight },
-  { title: 'Users', href: '/admin/users', icon: Users },
   { title: 'Audit', href: '/admin/audit', icon: FileText },
 ];
 

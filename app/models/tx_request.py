@@ -20,15 +20,25 @@ class TxType(str, enum.Enum):
 
 
 class TxStatus(str, enum.Enum):
-    """Transaction status state machine."""
+    """
+    Transaction status state machine.
+
+    Flow v2 (tiered policies): Policy → KYT (conditional) → Approval (conditional) → Sign
+    """
     SUBMITTED = "SUBMITTED"
-    KYT_PENDING = "KYT_PENDING"
-    KYT_BLOCKED = "KYT_BLOCKED"
-    KYT_REVIEW = "KYT_REVIEW"
+    # Policy evaluation (first step in v2)
     POLICY_EVAL_PENDING = "POLICY_EVAL_PENDING"
     POLICY_BLOCKED = "POLICY_BLOCKED"
+    # KYT (conditional based on policy)
+    KYT_PENDING = "KYT_PENDING"
+    KYT_SKIPPED = "KYT_SKIPPED"  # NEW: KYT not required by policy
+    KYT_BLOCKED = "KYT_BLOCKED"
+    KYT_REVIEW = "KYT_REVIEW"
+    # Approval (conditional based on policy)
     APPROVAL_PENDING = "APPROVAL_PENDING"
+    APPROVAL_SKIPPED = "APPROVAL_SKIPPED"  # NEW: Approval not required by policy
     REJECTED = "REJECTED"
+    # Signing and broadcast
     SIGN_PENDING = "SIGN_PENDING"
     SIGNED = "SIGNED"
     FAILED_SIGN = "FAILED_SIGN"
@@ -40,22 +50,47 @@ class TxStatus(str, enum.Enum):
     FINALIZED = "FINALIZED"
 
 
-# Valid state transitions
+# Valid state transitions (v2 flow: Policy → KYT → Approval → Sign)
 VALID_TRANSITIONS = {
-    TxStatus.SUBMITTED: [TxStatus.KYT_PENDING],
-    TxStatus.KYT_PENDING: [TxStatus.KYT_BLOCKED, TxStatus.KYT_REVIEW, TxStatus.POLICY_EVAL_PENDING],
-    TxStatus.KYT_BLOCKED: [],  # Terminal state
-    TxStatus.KYT_REVIEW: [TxStatus.KYT_BLOCKED, TxStatus.POLICY_EVAL_PENDING],  # After case resolution
-    TxStatus.POLICY_EVAL_PENDING: [TxStatus.POLICY_BLOCKED, TxStatus.APPROVAL_PENDING, TxStatus.SIGN_PENDING],
+    # Start → Policy
+    TxStatus.SUBMITTED: [TxStatus.POLICY_EVAL_PENDING],
+    # Policy → KYT or Blocked
+    TxStatus.POLICY_EVAL_PENDING: [
+        TxStatus.POLICY_BLOCKED,
+        TxStatus.KYT_PENDING,     # KYT required
+        TxStatus.KYT_SKIPPED,     # KYT not required, skip to approval
+    ],
     TxStatus.POLICY_BLOCKED: [],  # Terminal state
+    # KYT → Approval or Blocked
+    TxStatus.KYT_PENDING: [
+        TxStatus.KYT_BLOCKED,
+        TxStatus.KYT_REVIEW,
+        TxStatus.APPROVAL_PENDING,   # KYT passed, approval required
+        TxStatus.APPROVAL_SKIPPED,   # KYT passed, no approval required
+    ],
+    TxStatus.KYT_SKIPPED: [
+        TxStatus.APPROVAL_PENDING,   # No KYT, but approval required
+        TxStatus.APPROVAL_SKIPPED,   # No KYT, no approval - fast track
+    ],
+    TxStatus.KYT_BLOCKED: [],  # Terminal state
+    TxStatus.KYT_REVIEW: [
+        TxStatus.KYT_BLOCKED,        # Case resolved as BLOCK
+        TxStatus.APPROVAL_PENDING,   # Case resolved as ALLOW, approval required
+        TxStatus.APPROVAL_SKIPPED,   # Case resolved as ALLOW, no approval
+    ],
+    # Approval → Sign or Rejected
     TxStatus.APPROVAL_PENDING: [TxStatus.REJECTED, TxStatus.SIGN_PENDING],
+    TxStatus.APPROVAL_SKIPPED: [TxStatus.SIGN_PENDING],
     TxStatus.REJECTED: [],  # Terminal state
+    # Sign → Broadcast
     TxStatus.SIGN_PENDING: [TxStatus.SIGNED, TxStatus.FAILED_SIGN],
     TxStatus.SIGNED: [TxStatus.BROADCAST_PENDING],
     TxStatus.FAILED_SIGN: [],  # Terminal state
+    # Broadcast → Confirm
     TxStatus.BROADCAST_PENDING: [TxStatus.BROADCASTED, TxStatus.FAILED_BROADCAST],
     TxStatus.BROADCASTED: [TxStatus.CONFIRMING],
     TxStatus.FAILED_BROADCAST: [TxStatus.BROADCAST_PENDING],  # Can retry
+    # Confirm → Finalize
     TxStatus.CONFIRMING: [TxStatus.CONFIRMED],
     TxStatus.CONFIRMED: [TxStatus.FINALIZED],
     TxStatus.FINALIZED: [],  # Terminal state

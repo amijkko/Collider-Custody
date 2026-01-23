@@ -1,16 +1,17 @@
 'use client';
 
 import * as React from 'react';
-import { ArrowUpRight, RefreshCw, AlertCircle } from 'lucide-react';
+import { ArrowUpRight, RefreshCw, AlertCircle, Shield } from 'lucide-react';
 import { Header, PageContainer } from '@/components/layout/header';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatusBadge } from '@/components/ui/badge';
+import { PolicyPreview, PolicyResultBadge } from '@/components/policy/policy-preview';
 import { useToastHelpers } from '@/hooks/use-toast';
-import { walletsApi, txRequestsApi } from '@/lib/api';
+import { walletsApi, txRequestsApi, groupsApi } from '@/lib/api';
 import { formatAddress, formatRelativeTime, isValidAddress, isValidAmount } from '@/lib/utils';
-import { Wallet, WithdrawRequest } from '@/types';
+import { Wallet, WithdrawRequest, PolicyEvalPreview, Group } from '@/types';
 
 export default function WithdrawPage() {
   const toast = useToastHelpers();
@@ -20,25 +21,37 @@ export default function WithdrawPage() {
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [availableBalance, setAvailableBalance] = React.useState<number>(0);
   const [isLoadingBalance, setIsLoadingBalance] = React.useState(false);
-  
+
   // Form state
   const [toAddress, setToAddress] = React.useState('');
   const [amount, setAmount] = React.useState('');
   const [errors, setErrors] = React.useState<Record<string, string>>({});
 
+  // Policy preview state
+  const [userGroup, setUserGroup] = React.useState<Group | null>(null);
+  const [policyPreview, setPolicyPreview] = React.useState<PolicyEvalPreview | null>(null);
+  const [isLoadingPolicy, setIsLoadingPolicy] = React.useState(false);
+  const [policyError, setPolicyError] = React.useState<string | null>(null);
+
   const loadData = React.useCallback(async () => {
     try {
-      const [walletsRes, txRes] = await Promise.all([
+      const [walletsRes, txRes, groupsRes] = await Promise.all([
         walletsApi.list(),
         txRequestsApi.list(),
+        groupsApi.list().catch(() => ({ data: { groups: [] } })),
       ]);
-      
+
       // Only show MPC wallets to users (hide DEV_SIGNER)
-      const mpcWallet = walletsRes.data.find(w => 
+      const mpcWallet = walletsRes.data.find(w =>
         w.status === 'ACTIVE' && w.custody_backend === 'MPC_TECDSA'
       );
       setWallet(mpcWallet || null);
-      
+
+      // Load user's primary group (first group in list, usually Retail)
+      if (groupsRes.data.groups.length > 0) {
+        setUserGroup(groupsRes.data.groups[0]);
+      }
+
       // Load ledger balance if wallet found (only CREDITED deposits are available)
       if (mpcWallet) {
         setIsLoadingBalance(true);
@@ -52,7 +65,7 @@ export default function WithdrawPage() {
           setIsLoadingBalance(false);
         }
       }
-      
+
       // Show withdrawals only for MPC wallets
       const mpcWalletIds = walletsRes.data
         .filter(w => w.custody_backend === 'MPC_TECDSA')
@@ -68,6 +81,43 @@ export default function WithdrawPage() {
   React.useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // Preview policy when address and amount change
+  const checkPolicy = React.useCallback(async () => {
+    if (!userGroup || !isValidAddress(toAddress) || !isValidAmount(amount)) {
+      setPolicyPreview(null);
+      setPolicyError(null);
+      return;
+    }
+
+    setIsLoadingPolicy(true);
+    setPolicyError(null);
+
+    try {
+      // Convert ETH to wei for API
+      const amountWei = (parseFloat(amount) * 1e18).toFixed(0);
+      const res = await groupsApi.previewPolicy(userGroup.id, {
+        to_address: toAddress,
+        amount: amountWei,
+        asset: 'ETH',
+      });
+      setPolicyPreview(res.data);
+    } catch (err) {
+      console.error('Policy preview failed:', err);
+      setPolicyError(err instanceof Error ? err.message : 'Failed to evaluate policy');
+      setPolicyPreview(null);
+    } finally {
+      setIsLoadingPolicy(false);
+    }
+  }, [userGroup, toAddress, amount]);
+
+  // Debounce policy check
+  React.useEffect(() => {
+    const timer = setTimeout(() => {
+      checkPolicy();
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [checkPolicy]);
 
   const validate = () => {
     const newErrors: Record<string, string> = {};
@@ -182,17 +232,50 @@ export default function WithdrawPage() {
                     </div>
                   </div>
 
-                  <div className="p-4 rounded-lg bg-amber-500/10 border border-amber-500/20">
-                    <div className="flex items-start gap-2">
-                      <AlertCircle className="h-4 w-4 text-amber-400 mt-0.5 flex-shrink-0" />
-                      <p className="text-sm text-amber-400">
-                        After admin approval, you'll need to sign the transaction using your password.
-                      </p>
-                    </div>
-                  </div>
+                  {/* Policy Preview */}
+                  {(toAddress && amount) && (
+                    <PolicyPreview
+                      preview={policyPreview}
+                      isLoading={isLoadingPolicy}
+                      error={policyError}
+                    />
+                  )}
 
-                  <Button type="submit" className="w-full" isLoading={isSubmitting}>
-                    Request Withdrawal
+                  {/* Show warning only if policy allows but requires verification */}
+                  {policyPreview?.allowed && (policyPreview.kyt_required || policyPreview.approval_required) && (
+                    <div className="p-4 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                      <div className="flex items-start gap-2">
+                        <AlertCircle className="h-4 w-4 text-amber-400 mt-0.5 flex-shrink-0" />
+                        <p className="text-sm text-amber-400">
+                          {policyPreview.approval_required
+                            ? "After admin approval, you'll need to sign the transaction using your password."
+                            : "You'll need to sign the transaction using your password."}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Fast track info */}
+                  {policyPreview?.allowed && !policyPreview.kyt_required && !policyPreview.approval_required && (
+                    <div className="p-4 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+                      <div className="flex items-start gap-2">
+                        <Shield className="h-4 w-4 text-emerald-400 mt-0.5 flex-shrink-0" />
+                        <p className="text-sm text-emerald-400">
+                          Fast track: This transaction will proceed directly to signing (no KYT or approval required).
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  <Button
+                    type="submit"
+                    className="w-full"
+                    isLoading={isSubmitting}
+                    disabled={policyPreview !== null && !policyPreview.allowed}
+                  >
+                    {policyPreview && !policyPreview.allowed
+                      ? 'Transaction Blocked'
+                      : 'Request Withdrawal'}
                   </Button>
                 </form>
               ) : (
@@ -226,9 +309,14 @@ export default function WithdrawPage() {
                           <p className="font-mono text-sm text-surface-200">
                             To: {formatAddress(tx.to_address)}
                           </p>
-                          <p className="text-sm text-surface-500">
-                            {formatRelativeTime(tx.created_at)}
-                          </p>
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className="text-sm text-surface-500">
+                              {formatRelativeTime(tx.created_at)}
+                            </span>
+                            {tx.policy_result && (
+                              <PolicyResultBadge policyResult={tx.policy_result} />
+                            )}
+                          </div>
                         </div>
                       </div>
                       <div className="text-right">

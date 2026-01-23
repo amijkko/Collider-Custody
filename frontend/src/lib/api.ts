@@ -286,3 +286,73 @@ export const depositsApi = {
   },
 };
 
+// Groups API
+export const groupsApi = {
+  seed: async () => {
+    return apiFetch<{ message: string; created: any }>('/v1/groups/seed', {
+      method: 'POST',
+    });
+  },
+
+  list: async () => {
+    return apiFetch<{ groups: import('@/types').Group[]; total: number }>('/v1/groups');
+  },
+
+  get: async (id: string) => {
+    return apiFetch<import('@/types').Group>(`/v1/groups/${id}`);
+  },
+
+  create: async (data: { name: string; description?: string; is_default?: boolean }) => {
+    return apiFetch<import('@/types').Group>('/v1/groups', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  // Address Book
+  listAddresses: async (groupId: string, kind?: 'ALLOW' | 'DENY') => {
+    const query = kind ? `?kind=${kind}` : '';
+    return apiFetch<import('@/types').AddressBookList>(`/v1/groups/${groupId}/addresses${query}`);
+  },
+
+  addAddress: async (groupId: string, data: { address: string; kind: 'ALLOW' | 'DENY'; label?: string }) => {
+    return apiFetch<import('@/types').AddressBookEntry>(`/v1/groups/${groupId}/addresses`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  removeAddress: async (groupId: string, address: string) => {
+    return apiFetch<{ message: string }>(`/v1/groups/${groupId}/addresses/${address}`, {
+      method: 'DELETE',
+    });
+  },
+
+  checkAddress: async (groupId: string, address: string) => {
+    return apiFetch<import('@/types').AddressCheckResult>(`/v1/groups/${groupId}/addresses/check/${address}`);
+  },
+
+  // Policies
+  listPolicies: async () => {
+    return apiFetch<{ policy_sets: import('@/types').PolicySet[]; total: number }>('/v1/groups/policies');
+  },
+
+  getPolicy: async (policySetId: string) => {
+    return apiFetch<import('@/types').PolicySet>(`/v1/groups/policies/${policySetId}`);
+  },
+
+  assignPolicy: async (groupId: string, policySetId: string) => {
+    return apiFetch<import('@/types').Group>(`/v1/groups/${groupId}/policy`, {
+      method: 'POST',
+      body: JSON.stringify({ policy_set_id: policySetId }),
+    });
+  },
+
+  previewPolicy: async (groupId: string, data: { to_address: string; amount: string; asset?: string }) => {
+    return apiFetch<import('@/types').PolicyEvalPreview>(`/v1/groups/${groupId}/policy/preview`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+};
+
