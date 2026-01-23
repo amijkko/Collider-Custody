@@ -66,8 +66,10 @@ async def list_wallets(
     current_user: User = Depends(get_current_user),
     correlation_id: str = Depends(get_correlation_id)
 ):
-    """List wallets with optional filters."""
+    """List wallets with optional filters. Non-admins only see their wallets."""
     wallets = await wallet_service.list_wallets(
+        user_id=str(current_user.id),
+        is_admin=(current_user.role == UserRole.ADMIN),
         wallet_type=wallet_type,
         subject_id=subject_id,
         limit=limit,

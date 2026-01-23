@@ -272,22 +272,28 @@ class WalletService:
     
     async def list_wallets(
         self,
+        user_id: Optional[str] = None,
+        is_admin: bool = False,
         wallet_type: Optional[WalletType] = None,
         subject_id: Optional[str] = None,
         limit: int = 100,
         offset: int = 0
     ) -> List[Wallet]:
-        """List wallets with optional filters."""
+        """List wallets with optional filters. Non-admins only see their own wallets."""
         from sqlalchemy.orm import selectinload
         query = select(Wallet).options(selectinload(Wallet.roles))
-        
+
+        # Filter by user's wallet roles (unless admin)
+        if user_id and not is_admin:
+            query = query.where(Wallet.roles.any(user_id=user_id))
+
         if wallet_type:
             query = query.where(Wallet.wallet_type == wallet_type)
         if subject_id:
             query = query.where(Wallet.subject_id == subject_id)
-        
+
         query = query.order_by(Wallet.created_at.desc()).limit(limit).offset(offset)
-        
+
         result = await self.db.execute(query)
         return list(result.scalars().all())
     
