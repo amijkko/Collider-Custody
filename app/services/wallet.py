@@ -185,8 +185,20 @@ class WalletService:
             wallet.tags["mpc_threshold"] = f"{threshold_t}-of-{total_n}"
             
             await self.db.flush()
+
+            # Create OWNER role for the creator
+            owner_role = WalletRole(
+                id=str(uuid4()),
+                wallet_id=wallet.id,
+                user_id=created_by,
+                role=WalletRoleType.OWNER,
+                created_by=created_by,
+            )
+            self.db.add(owner_role)
+            await self.db.flush()
+
             await self.db.refresh(wallet, ["roles"])
-            
+
             # Log audit event
             await self.audit.log_event(
                 event_type=AuditEventType.WALLET_CREATED,
@@ -204,7 +216,7 @@ class WalletService:
                     "mpc_threshold": f"{threshold_t}-of-{total_n}",
                 }
             )
-            
+
             logger.info(f"Created MPC_TECDSA wallet: {wallet.id} with address {wallet.address}")
             return wallet
             
