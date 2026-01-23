@@ -22,6 +22,7 @@ from app.api import (
 )
 from app.api.deposits import router as deposits_router
 from app.api.mpc_websocket import router as mpc_ws_router
+from app.api.kyt import router as kyt_router
 from app.services.chain_listener import ChainListener
 from app.services.mpc_grpc_client import (
     initialize_mpc_signer_client,
@@ -177,6 +178,7 @@ app.include_router(cases_router)
 app.include_router(policies_router)
 app.include_router(audit_router)
 app.include_router(deposits_router)
+app.include_router(kyt_router)
 app.include_router(mpc_ws_router, tags=["MPC WebSocket"])
 
 
