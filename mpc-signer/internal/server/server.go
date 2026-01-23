@@ -5,30 +5,56 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/collider/mpc-signer/internal/dkg"
 	mpcSigning "github.com/collider/mpc-signer/internal/signing"
 	"github.com/collider/mpc-signer/internal/storage"
-	"github.com/google/uuid"
+	"github.com/collider/mpc-signer/proto"
 	"go.uber.org/zap"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 const (
 	sessionTimeout = 5 * time.Minute
-	permitSecret   = "mpc-permit-secret-change-in-production" // TODO: Load from env
 )
+
+// Config holds server configuration
+type Config struct {
+	PermitSecret string // Secret for signing permits (required)
+	NodeID       string // Unique node identifier
+}
+
+// LoadConfigFromEnv loads configuration from environment variables
+func LoadConfigFromEnv() (*Config, error) {
+	permitSecret := os.Getenv("MPC_PERMIT_SECRET")
+	if permitSecret == "" {
+		return nil, fmt.Errorf("MPC_PERMIT_SECRET environment variable is required")
+	}
+	if len(permitSecret) < 32 {
+		return nil, fmt.Errorf("MPC_PERMIT_SECRET must be at least 32 characters")
+	}
+
+	nodeID := os.Getenv("MPC_NODE_ID")
+	if nodeID == "" {
+		nodeID = "bank-signer-1"
+	}
+
+	return &Config{
+		PermitSecret: permitSecret,
+		NodeID:       nodeID,
+	}, nil
+}
 
 // MPCServer implements the gRPC MPC service
 type MPCServer struct {
-	UnimplementedMPCSignerServer
+	proto.UnimplementedMPCSignerServer
 
+	config         *Config
 	storage        storage.Storage
-	nodeID         string
 	logger         *zap.Logger
 	dkgHandler     *dkg.DKGHandler
 	signingHandler *mpcSigning.SigningHandler
@@ -36,10 +62,17 @@ type MPCServer struct {
 }
 
 // NewMPCServer creates a new MPC server instance
-func NewMPCServer(store storage.Storage, nodeID string, logger *zap.Logger) *MPCServer {
+func NewMPCServer(config *Config, store storage.Storage, logger *zap.Logger) (*MPCServer, error) {
+	if config == nil {
+		return nil, fmt.Errorf("config is required")
+	}
+	if config.PermitSecret == "" {
+		return nil, fmt.Errorf("permit secret is required")
+	}
+
 	server := &MPCServer{
+		config:         config,
 		storage:        store,
-		nodeID:         nodeID,
 		logger:         logger,
 		dkgHandler:     dkg.NewDKGHandler(logger),
 		signingHandler: mpcSigning.NewSigningHandler(logger),
@@ -48,11 +81,11 @@ func NewMPCServer(store storage.Storage, nodeID string, logger *zap.Logger) *MPC
 	// Start cleanup goroutine
 	go server.cleanupExpiredSessions()
 
-	return server
+	return server, nil
 }
 
 // Health implements health check
-func (s *MPCServer) Health(ctx context.Context, req *HealthRequest) (*HealthResponse, error) {
+func (s *MPCServer) Health(ctx context.Context, req *proto.HealthRequest) (*proto.HealthResponse, error) {
 	shares, _ := s.storage.ListShares()
 
 	var activeSessions int
@@ -61,7 +94,7 @@ func (s *MPCServer) Health(ctx context.Context, req *HealthRequest) (*HealthResp
 		return true
 	})
 
-	return &HealthResponse{
+	return &proto.HealthResponse{
 		Healthy:        true,
 		Version:        "1.0.0",
 		ActiveSessions: int32(activeSessions),
@@ -70,7 +103,7 @@ func (s *MPCServer) Health(ctx context.Context, req *HealthRequest) (*HealthResp
 }
 
 // StartDKG initiates a new DKG session
-func (s *MPCServer) StartDKG(ctx context.Context, req *StartDKGRequest) (*StartDKGResponse, error) {
+func (s *MPCServer) StartDKG(ctx context.Context, req *proto.StartDKGRequest) (*proto.StartDKGResponse, error) {
 	s.logger.Info("Starting DKG session",
 		zap.String("session_id", req.SessionId),
 		zap.String("wallet_id", req.WalletId),
@@ -105,24 +138,27 @@ func (s *MPCServer) StartDKG(ctx context.Context, req *StartDKGRequest) (*StartD
 
 	_ = session // session is managed by dkgHandler
 
-	return &StartDKGResponse{
+	return &proto.StartDKGResponse{
 		Success:   true,
 		Round1Msg: round1Msg,
 	}, nil
 }
 
 // DKGRound processes a DKG protocol round
-func (s *MPCServer) DKGRound(ctx context.Context, req *DKGRoundRequest) (*DKGRoundResponse, error) {
+func (s *MPCServer) DKGRound(ctx context.Context, req *proto.DKGRoundRequest) (*proto.DKGRoundResponse, error) {
 	s.logger.Debug("Processing DKG round",
 		zap.String("session_id", req.SessionId),
 		zap.Int32("round", req.Round),
 		zap.Int("incoming_messages", len(req.IncomingMessages)),
 	)
 
-	// Convert incoming messages
-	var incomingMsgs [][]byte
+	// Convert incoming messages with sender information
+	incomingMsgs := make([]dkg.IncomingMessage, 0, len(req.IncomingMessages))
 	for _, msg := range req.IncomingMessages {
-		incomingMsgs = append(incomingMsgs, msg.Payload)
+		incomingMsgs = append(incomingMsgs, dkg.IncomingMessage{
+			FromPartyIndex: int(msg.FromParty),
+			Payload:        msg.Payload,
+		})
 	}
 
 	// Process the round
@@ -135,14 +171,14 @@ func (s *MPCServer) DKGRound(ctx context.Context, req *DKGRoundRequest) (*DKGRou
 		return nil, status.Errorf(codes.Internal, "DKG round failed: %v", err)
 	}
 
-	resp := &DKGRoundResponse{
+	resp := &proto.DKGRoundResponse{
 		Success:     true,
 		IsFinal:     isFinal,
 		OutgoingMsg: outMsg,
 	}
 
 	if isFinal && result != nil {
-		resp.Result = &DKGResult{
+		resp.Result = &proto.DKGResult{
 			KeysetId:        result.KeysetID,
 			PublicKey:       result.PublicKey,
 			PublicKeyFull:   result.PublicKeyFull,
@@ -181,15 +217,15 @@ func (s *MPCServer) DKGRound(ctx context.Context, req *DKGRoundRequest) (*DKGRou
 }
 
 // FinalizeDKG finalizes the DKG session
-func (s *MPCServer) FinalizeDKG(ctx context.Context, req *FinalizeDKGRequest) (*FinalizeDKGResponse, error) {
+func (s *MPCServer) FinalizeDKG(ctx context.Context, req *proto.FinalizeDKGRequest) (*proto.FinalizeDKGResponse, error) {
 	// In most cases, DKG finalizes automatically when rounds complete
-	return &FinalizeDKGResponse{
+	return &proto.FinalizeDKGResponse{
 		Success: true,
 	}, nil
 }
 
 // StartSigning initiates a new signing session
-func (s *MPCServer) StartSigning(ctx context.Context, req *StartSigningRequest) (*StartSigningResponse, error) {
+func (s *MPCServer) StartSigning(ctx context.Context, req *proto.StartSigningRequest) (*proto.StartSigningResponse, error) {
 	s.logger.Info("Starting signing session",
 		zap.String("session_id", req.SessionId),
 		zap.String("keyset_id", req.KeysetId),
@@ -233,23 +269,26 @@ func (s *MPCServer) StartSigning(ctx context.Context, req *StartSigningRequest) 
 	// Update last used timestamp
 	s.storage.UpdateShareLastUsed(req.KeysetId)
 
-	return &StartSigningResponse{
+	return &proto.StartSigningResponse{
 		Success:   true,
 		Round1Msg: round1Msg,
 	}, nil
 }
 
 // SigningRound processes a signing protocol round
-func (s *MPCServer) SigningRound(ctx context.Context, req *SigningRoundRequest) (*SigningRoundResponse, error) {
+func (s *MPCServer) SigningRound(ctx context.Context, req *proto.SigningRoundRequest) (*proto.SigningRoundResponse, error) {
 	s.logger.Debug("Processing signing round",
 		zap.String("session_id", req.SessionId),
 		zap.Int32("round", req.Round),
 	)
 
-	// Convert incoming messages
-	var incomingMsgs [][]byte
+	// Convert incoming messages with sender information
+	incomingMsgs := make([]mpcSigning.IncomingMessage, 0, len(req.IncomingMessages))
 	for _, msg := range req.IncomingMessages {
-		incomingMsgs = append(incomingMsgs, msg.Payload)
+		incomingMsgs = append(incomingMsgs, mpcSigning.IncomingMessage{
+			FromPartyIndex: int(msg.FromParty),
+			Payload:        msg.Payload,
+		})
 	}
 
 	// Process the round
@@ -262,14 +301,14 @@ func (s *MPCServer) SigningRound(ctx context.Context, req *SigningRoundRequest) 
 		return nil, status.Errorf(codes.Internal, "signing round failed: %v", err)
 	}
 
-	resp := &SigningRoundResponse{
+	resp := &proto.SigningRoundResponse{
 		Success:     true,
 		IsFinal:     isFinal,
 		OutgoingMsg: outMsg,
 	}
 
 	if isFinal && result != nil {
-		resp.Result = &SigningResult{
+		resp.Result = &proto.SigningResult{
 			SignatureR:    result.SignatureR,
 			SignatureS:    result.SignatureS,
 			SignatureV:    int32(result.SignatureV),
@@ -288,20 +327,20 @@ func (s *MPCServer) SigningRound(ctx context.Context, req *SigningRoundRequest) 
 }
 
 // FinalizeSigning finalizes the signing session
-func (s *MPCServer) FinalizeSigning(ctx context.Context, req *FinalizeSigningRequest) (*FinalizeSigningResponse, error) {
-	return &FinalizeSigningResponse{
+func (s *MPCServer) FinalizeSigning(ctx context.Context, req *proto.FinalizeSigningRequest) (*proto.FinalizeSigningResponse, error) {
+	return &proto.FinalizeSigningResponse{
 		Success: true,
 	}, nil
 }
 
 // GetKeysetInfo returns information about a keyset
-func (s *MPCServer) GetKeysetInfo(ctx context.Context, req *GetKeysetInfoRequest) (*GetKeysetInfoResponse, error) {
+func (s *MPCServer) GetKeysetInfo(ctx context.Context, req *proto.GetKeysetInfoRequest) (*proto.GetKeysetInfoResponse, error) {
 	share, err := s.storage.GetShare(req.KeysetId)
 	if err != nil {
-		return &GetKeysetInfoResponse{Exists: false}, nil
+		return &proto.GetKeysetInfoResponse{Exists: false}, nil
 	}
 
-	return &GetKeysetInfoResponse{
+	return &proto.GetKeysetInfoResponse{
 		Exists:          true,
 		KeysetId:        share.KeysetID,
 		WalletId:        share.WalletID,
@@ -313,7 +352,7 @@ func (s *MPCServer) GetKeysetInfo(ctx context.Context, req *GetKeysetInfoRequest
 }
 
 // DeleteKeyset removes a keyset (for key rotation)
-func (s *MPCServer) DeleteKeyset(ctx context.Context, req *DeleteKeysetRequest) (*DeleteKeysetResponse, error) {
+func (s *MPCServer) DeleteKeyset(ctx context.Context, req *proto.DeleteKeysetRequest) (*proto.DeleteKeysetResponse, error) {
 	s.logger.Warn("Deleting keyset",
 		zap.String("keyset_id", req.KeysetId),
 		zap.String("reason", req.Reason),
@@ -323,7 +362,7 @@ func (s *MPCServer) DeleteKeyset(ctx context.Context, req *DeleteKeysetRequest) 
 		return nil, status.Errorf(codes.Internal, "failed to delete keyset: %v", err)
 	}
 
-	return &DeleteKeysetResponse{Success: true}, nil
+	return &proto.DeleteKeysetResponse{Success: true}, nil
 }
 
 // Helper types and methods
@@ -334,7 +373,7 @@ type sessionMeta struct {
 	ExpiresAt time.Time
 }
 
-func (s *MPCServer) validatePermit(permit *SigningPermit, keysetID string, messageHash []byte) error {
+func (s *MPCServer) validatePermit(permit *proto.SigningPermit, keysetID string, messageHash []byte) error {
 	if permit == nil {
 		return fmt.Errorf("permit required")
 	}
@@ -358,8 +397,8 @@ func (s *MPCServer) validatePermit(permit *SigningPermit, keysetID string, messa
 	return nil
 }
 
-func (s *MPCServer) computePermitSignature(permit *SigningPermit) []byte {
-	h := hmac.New(sha256.New, []byte(permitSecret))
+func (s *MPCServer) computePermitSignature(permit *proto.SigningPermit) []byte {
+	h := hmac.New(sha256.New, []byte(s.config.PermitSecret))
 	h.Write([]byte(permit.TxRequestId))
 	h.Write([]byte(permit.WalletId))
 	h.Write([]byte(permit.KeysetId))
@@ -394,150 +433,4 @@ func (s *MPCServer) cleanupExpiredSessions() {
 			return true
 		})
 	}
-}
-
-// Placeholder for generated gRPC code
-// In production, this would be generated from mpc.proto
-
-type UnimplementedMPCSignerServer struct{}
-
-type HealthRequest struct{}
-type HealthResponse struct {
-	Healthy        bool
-	Version        string
-	ActiveSessions int32
-	StoredKeysets  int32
-}
-
-type StartDKGRequest struct {
-	SessionId    string
-	WalletId     string
-	Threshold    int32
-	TotalParties int32
-	PartyIndex   int32
-}
-
-type StartDKGResponse struct {
-	Success   bool
-	Error     string
-	Round1Msg []byte
-}
-
-type DKGRoundRequest struct {
-	SessionId        string
-	Round            int32
-	IncomingMessages []*PartyMessage
-}
-
-type PartyMessage struct {
-	FromParty int32
-	Payload   []byte
-}
-
-type DKGRoundResponse struct {
-	Success     bool
-	Error       string
-	IsFinal     bool
-	OutgoingMsg []byte
-	Result      *DKGResult
-}
-
-type DKGResult struct {
-	KeysetId        string
-	PublicKey       []byte
-	PublicKeyFull   []byte
-	EthereumAddress string
-}
-
-type FinalizeDKGRequest struct {
-	SessionId string
-}
-
-type FinalizeDKGResponse struct {
-	Success bool
-	Error   string
-	Result  *DKGResult
-}
-
-type SigningPermit struct {
-	TxRequestId          string
-	WalletId             string
-	KeysetId             string
-	TxHash               []byte
-	ExpiresAt            int64
-	CoordinatorSignature []byte
-}
-
-type StartSigningRequest struct {
-	SessionId   string
-	KeysetId    string
-	MessageHash []byte
-	Permit      *SigningPermit
-	PartyIndex  int32
-}
-
-type StartSigningResponse struct {
-	Success   bool
-	Error     string
-	Round1Msg []byte
-}
-
-type SigningRoundRequest struct {
-	SessionId        string
-	Round            int32
-	IncomingMessages []*PartyMessage
-}
-
-type SigningRoundResponse struct {
-	Success     bool
-	Error       string
-	IsFinal     bool
-	OutgoingMsg []byte
-	Result      *SigningResult
-}
-
-type SigningResult struct {
-	SignatureR    []byte
-	SignatureS    []byte
-	SignatureV    int32
-	FullSignature []byte
-}
-
-type FinalizeSigningRequest struct {
-	SessionId string
-}
-
-type FinalizeSigningResponse struct {
-	Success bool
-	Error   string
-	Result  *SigningResult
-}
-
-type GetKeysetInfoRequest struct {
-	KeysetId string
-}
-
-type GetKeysetInfoResponse struct {
-	Exists          bool
-	KeysetId        string
-	WalletId        string
-	PublicKey       []byte
-	EthereumAddress string
-	CreatedAt       int64
-	LastUsedAt      int64
-}
-
-type DeleteKeysetRequest struct {
-	KeysetId string
-	Reason   string
-}
-
-type DeleteKeysetResponse struct {
-	Success bool
-	Error   string
-}
-
-func RegisterMPCSignerServer(s *grpc.Server, srv *MPCServer) {
-	// TODO: Register actual generated gRPC service
-	// pb.RegisterMPCSignerServer(s, srv)
 }

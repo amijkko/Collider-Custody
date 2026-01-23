@@ -1,17 +1,34 @@
+//go:build !tss
+// +build !tss
+
 package dkg
 
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
 
 	"go.uber.org/zap"
+	"golang.org/x/crypto/sha3"
 )
+
+// IncomingMessage represents a message from another party
+type IncomingMessage struct {
+	FromPartyIndex int
+	Payload        []byte
+}
+
+// OutgoingMessage represents a message to be sent to other parties
+type OutgoingMessage struct {
+	ToPartyIndex int  // -1 means broadcast to all
+	IsBroadcast  bool // true if message should go to all parties
+	Payload      []byte
+}
 
 // DKGSession represents an active DKG session
 type DKGSession struct {
@@ -21,18 +38,18 @@ type DKGSession struct {
 	Threshold    int
 	TotalParties int
 
-	round        int
-	completed    bool
-	mu           sync.Mutex
-	CreatedAt    time.Time
-	logger       *zap.Logger
+	round     int
+	completed bool
+	mu        sync.Mutex
+	CreatedAt time.Time
+	logger    *zap.Logger
 }
 
 // DKGResult contains the result of a successful DKG
 type DKGResult struct {
 	KeysetID        string `json:"keyset_id"`
-	PublicKey       []byte `json:"public_key"`        // Compressed (33 bytes)
-	PublicKeyFull   []byte `json:"public_key_full"`   // Uncompressed (65 bytes)
+	PublicKey       []byte `json:"public_key"`      // Compressed (33 bytes)
+	PublicKeyFull   []byte `json:"public_key_full"` // Uncompressed (65 bytes)
 	EthereumAddress string `json:"ethereum_address"`
 	SaveData        []byte `json:"save_data"` // Serialized save data
 }
@@ -99,7 +116,7 @@ func (h *DKGHandler) StartSession(
 func (h *DKGHandler) ProcessRound(
 	sessionID string,
 	round int,
-	incomingMessages [][]byte,
+	incomingMessages []IncomingMessage,
 ) ([]byte, *DKGResult, bool, error) {
 	h.mu.RLock()
 	session, exists := h.sessions[sessionID]
@@ -141,11 +158,12 @@ func (h *DKGHandler) ProcessRound(
 
 		// Serialize save data (simulated)
 		saveData := map[string]interface{}{
-			"keyset_id": keysetID,
-			"party_index": session.PartyIndex,
-			"threshold": session.Threshold,
-			"total_parties": session.TotalParties,
-			"private_key_share": "encrypted_share_data", // In production, this would be the actual share
+			"keyset_id":         keysetID,
+			"party_index":       session.PartyIndex,
+			"threshold":         session.Threshold,
+			"total_parties":     session.TotalParties,
+			"curve":             "P-256",
+			"private_key_d_b64": base64.StdEncoding.EncodeToString(privateKey.D.Bytes()),
 		}
 		saveDataBytes, _ := json.Marshal(saveData)
 
@@ -218,9 +236,10 @@ func serializeUncompressedPublicKey(pub *ecdsa.PublicKey) []byte {
 
 func publicKeyToAddress(pub *ecdsa.PublicKey) string {
 	// Simplified Ethereum address derivation
-	// In production, use Keccak256 hash
 	pubBytes := serializeUncompressedPublicKey(pub)[1:]
-	hash := sha256.Sum256(pubBytes)
+	hasher := sha3.NewLegacyKeccak256()
+	_, _ = hasher.Write(pubBytes)
+	hash := hasher.Sum(nil)
 	address := hash[len(hash)-20:]
 	return fmt.Sprintf("0x%x", address)
 }

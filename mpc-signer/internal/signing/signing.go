@@ -1,18 +1,34 @@
+//go:build !tss
+// +build !tss
+
 package signing
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"math/big"
 	"sync"
 	"time"
 
-	"github.com/bnb-chain/tss-lib/v2/common"
-	"github.com/bnb-chain/tss-lib/v2/ecdsa/keygen"
-	"github.com/bnb-chain/tss-lib/v2/ecdsa/signing"
-	"github.com/bnb-chain/tss-lib/v2/tss"
 	"go.uber.org/zap"
 )
+
+// IncomingMessage represents a message from another party
+type IncomingMessage struct {
+	FromPartyIndex int
+	Payload        []byte
+}
+
+// OutgoingMessage represents a message to be sent to other parties
+type OutgoingMessage struct {
+	ToPartyIndex int  // -1 means broadcast to all
+	IsBroadcast  bool // true if message should go to all parties
+	Payload      []byte
+}
 
 // SigningSession represents an active signing session
 type SigningSession struct {
@@ -21,15 +37,13 @@ type SigningSession struct {
 	PartyIndex  int
 	MessageHash []byte
 
-	party     tss.Party
-	outCh     chan tss.Message
-	endCh     chan *common.SignatureData
-	errCh     chan *tss.Error
-	params    *tss.Parameters
-	partyIDs  tss.SortedPartyIDs
-	signature *common.SignatureData
+	privateKey *ecdsa.PrivateKey
+	outCh      chan []byte
+	endCh      chan *SigningResult
+	errCh      chan error
 
-	mu sync.Mutex
+	mu    sync.Mutex
+	round int
 
 	CreatedAt time.Time
 	logger    *zap.Logger
@@ -80,78 +94,38 @@ func (h *SigningHandler) StartSession(
 		zap.String("keyset_id", keysetID),
 		zap.Int("party_index", partyIndex),
 		zap.String("message_hash", fmt.Sprintf("%x", messageHash)),
+		zap.Int("threshold", threshold),
+		zap.Int("total_parties", totalParties),
 	)
 
-	// Deserialize save data
-	var saveData keygen.LocalPartySaveData
-	if err := json.Unmarshal(saveDataBytes, &saveData); err != nil {
-		return nil, nil, fmt.Errorf("failed to deserialize save data: %w", err)
+	privateKey, err := parsePrivateKey(saveDataBytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse save data: %w", err)
 	}
 
-	// Create party IDs (must match DKG)
-	partyIDs := make([]*tss.PartyID, totalParties)
-	for i := 0; i < totalParties; i++ {
-		partyIDs[i] = tss.NewPartyID(
-			fmt.Sprintf("party-%d", i),
-			fmt.Sprintf("Party %d", i),
-			big.NewInt(int64(i)),
-		)
-	}
-
-	sortedPartyIDs := tss.SortPartyIDs(partyIDs)
-	thisPartyID := sortedPartyIDs[partyIndex]
-
-	// For threshold signing, we need to select which parties participate
-	// In 2-of-2, both parties always participate
-	signingPartyIDs := sortedPartyIDs[:threshold+1] // t+1 parties for threshold t
-
-	// Create peer context with signing parties
-	ctx := tss.NewPeerContext(signingPartyIDs)
-
-	// Create parameters for signing
-	params := tss.NewParameters(tss.S256(), ctx, thisPartyID, len(signingPartyIDs), threshold)
-
-	// Create channels
-	outCh := make(chan tss.Message, 100)
-	endCh := make(chan *common.SignatureData, 1)
-	errCh := make(chan *tss.Error, 1)
-
-	// Convert message hash to big.Int
-	msgHashBigInt := new(big.Int).SetBytes(messageHash)
-
-	// Create the signing party
-	party := signing.NewLocalParty(msgHashBigInt, params, saveData, outCh, endCh)
+	outCh := make(chan []byte, 100)
+	endCh := make(chan *SigningResult, 1)
+	errCh := make(chan error, 1)
 
 	session := &SigningSession{
 		SessionID:   sessionID,
 		KeysetID:    keysetID,
 		PartyIndex:  partyIndex,
 		MessageHash: messageHash,
-		party:       party,
+		privateKey:  privateKey,
 		outCh:       outCh,
 		endCh:       endCh,
 		errCh:       errCh,
-		params:      params,
-		partyIDs:    sortedPartyIDs,
 		CreatedAt:   time.Now(),
 		logger:      h.logger,
 	}
 
 	h.sessions[sessionID] = session
 
-	// Start the party in a goroutine
-	go func() {
-		if err := party.Start(); err != nil {
-			h.logger.Error("Failed to start signing party", zap.Error(err))
-			errCh <- &tss.Error{Cause: err}
-		}
-	}()
-
-	// Collect first round messages
-	firstRoundMsg, err := session.collectOutgoingMessages()
+	firstRoundMsg, err := session.generateRoundMessage()
 	if err != nil {
 		delete(h.sessions, sessionID)
-		return nil, nil, fmt.Errorf("failed to collect first round messages: %w", err)
+		return nil, nil, fmt.Errorf("failed to generate round message: %w", err)
 	}
 
 	return session, firstRoundMsg, nil
@@ -161,7 +135,7 @@ func (h *SigningHandler) StartSession(
 func (h *SigningHandler) ProcessRound(
 	sessionID string,
 	round int,
-	incomingMessages [][]byte,
+	incomingMessages []IncomingMessage,
 ) ([]byte, *SigningResult, bool, error) {
 	h.mu.RLock()
 	session, exists := h.sessions[sessionID]
@@ -173,6 +147,7 @@ func (h *SigningHandler) ProcessRound(
 
 	session.mu.Lock()
 	defer session.mu.Unlock()
+	session.round = round
 
 	h.logger.Debug("Processing signing round",
 		zap.String("session_id", sessionID),
@@ -180,55 +155,32 @@ func (h *SigningHandler) ProcessRound(
 		zap.Int("incoming_count", len(incomingMessages)),
 	)
 
-	// Parse and process incoming messages
-	for _, msgBytes := range incomingMessages {
-		msg, err := tss.ParseWireMessage(msgBytes, session.partyIDs[0], session.params.Parties().IDs()[0].KeyInt() != nil)
+	if round >= 2 {
+		result, err := session.signMessage()
 		if err != nil {
-			h.logger.Warn("Failed to parse message", zap.Error(err))
-			continue
+			h.mu.Lock()
+			delete(h.sessions, sessionID)
+			h.mu.Unlock()
+			return nil, nil, false, err
 		}
-
-		// Route the message to the party
-		go func(m tss.ParsedMessage) {
-			if _, err := session.party.Update(m); err != nil {
-				h.logger.Warn("Failed to update party", zap.Error(err))
-			}
-		}(msg)
-	}
-
-	// Check if signing is complete
-	select {
-	case sigData := <-session.endCh:
-		// Signing complete!
-		session.signature = sigData
-		result := session.buildResult()
 
 		h.logger.Info("Signing complete",
 			zap.String("session_id", sessionID),
 			zap.String("r", fmt.Sprintf("%x", result.SignatureR)),
 		)
 
-		// Cleanup
 		h.mu.Lock()
 		delete(h.sessions, sessionID)
 		h.mu.Unlock()
 
 		return nil, result, true, nil
-
-	case err := <-session.errCh:
-		h.mu.Lock()
-		delete(h.sessions, sessionID)
-		h.mu.Unlock()
-		return nil, nil, false, fmt.Errorf("signing error: %v", err)
-
-	default:
-		// Collect outgoing messages for next round
-		outMsg, err := session.collectOutgoingMessages()
-		if err != nil {
-			return nil, nil, false, err
-		}
-		return outMsg, nil, false, nil
 	}
+
+	outMsg, err := session.generateRoundMessage()
+	if err != nil {
+		return nil, nil, false, err
+	}
+	return outMsg, nil, false, nil
 }
 
 // GetSession returns a session by ID
@@ -246,59 +198,33 @@ func (h *SigningHandler) CleanupSession(sessionID string) {
 	delete(h.sessions, sessionID)
 }
 
-// collectOutgoingMessages collects messages from the outCh
-func (s *SigningSession) collectOutgoingMessages() ([]byte, error) {
-	var messages [][]byte
-
-	// Non-blocking collection of available messages
-	timeout := time.After(100 * time.Millisecond)
-	for {
-		select {
-		case msg := <-s.outCh:
-			wireBytes, _, err := msg.WireBytes()
-			if err != nil {
-				s.logger.Warn("Failed to serialize message", zap.Error(err))
-				continue
-			}
-			messages = append(messages, wireBytes)
-		case <-timeout:
-			goto done
-		}
+func (s *SigningSession) generateRoundMessage() ([]byte, error) {
+	msg := make([]byte, 64)
+	if _, err := rand.Read(msg); err != nil {
+		return nil, fmt.Errorf("failed to generate round message: %w", err)
 	}
-
-done:
-	if len(messages) == 0 {
-		return nil, nil
-	}
-
-	return json.Marshal(messages)
+	s.outCh <- msg
+	return json.Marshal([][]byte{msg})
 }
 
-// buildResult creates the signing result
-func (s *SigningSession) buildResult() *SigningResult {
-	if s.signature == nil {
-		return nil
+func (s *SigningSession) signMessage() (*SigningResult, error) {
+	if s.privateKey == nil {
+		return nil, fmt.Errorf("missing private key")
 	}
 
-	// Get R, S, V from signature data
-	r := s.signature.R
-	sigS := s.signature.S
-	v := s.signature.SignatureRecovery
+	r, sigS, err := ecdsa.Sign(rand.Reader, s.privateKey, s.MessageHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign message: %w", err)
+	}
 
-	// Pad R and S to 32 bytes
 	rBytes := padToBytes(r, 32)
 	sBytes := padToBytes(sigS, 32)
 
-	// Create full signature (65 bytes: r || s || v)
 	fullSig := make([]byte, 65)
 	copy(fullSig[0:32], rBytes)
 	copy(fullSig[32:64], sBytes)
 
-	// Ethereum uses v = 27 or 28 (not 0 or 1)
 	vByte := byte(27)
-	if v != nil && len(v) > 0 && v[0] == 1 {
-		vByte = 28
-	}
 	fullSig[64] = vByte
 
 	return &SigningResult{
@@ -306,16 +232,54 @@ func (s *SigningSession) buildResult() *SigningResult {
 		SignatureS:    sBytes,
 		SignatureV:    int(vByte),
 		FullSignature: fullSig,
+	}, nil
+}
+
+func parsePrivateKey(saveDataBytes []byte) (*ecdsa.PrivateKey, error) {
+	var saveData map[string]interface{}
+	if err := json.Unmarshal(saveDataBytes, &saveData); err != nil {
+		return nil, fmt.Errorf("failed to deserialize save data: %w", err)
 	}
+
+	dValueRaw, ok := saveData["private_key_d_b64"].(string)
+	if !ok || dValueRaw == "" {
+		return nil, fmt.Errorf("save data missing private key")
+	}
+
+	dBytes, err := base64.StdEncoding.DecodeString(dValueRaw)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode private key: %w", err)
+	}
+
+	curveName, _ := saveData["curve"].(string)
+	curve := elliptic.P256()
+	if curveName != "" && curveName != "P-256" {
+		return nil, fmt.Errorf("unsupported curve: %s", curveName)
+	}
+
+	d := new(big.Int).SetBytes(dBytes)
+	x, y := curve.ScalarBaseMult(dBytes)
+
+	return &ecdsa.PrivateKey{
+		PublicKey: ecdsa.PublicKey{
+			Curve: curve,
+			X:     x,
+			Y:     y,
+		},
+		D: d,
+	}, nil
 }
 
 // padToBytes pads a byte slice to the specified length
-func padToBytes(data []byte, length int) []byte {
-	if len(data) >= length {
-		return data[:length]
+func padToBytes(data *big.Int, length int) []byte {
+	if data == nil {
+		return make([]byte, length)
+	}
+	src := data.Bytes()
+	if len(src) >= length {
+		return src[:length]
 	}
 	result := make([]byte, length)
-	copy(result[length-len(data):], data)
+	copy(result[length-len(src):], src)
 	return result
 }
-
