@@ -25,7 +25,7 @@ async def create_tx_request(
     tx_data: TxRequestCreate,
     db: AsyncSession = Depends(get_db),
     orchestrator: TxOrchestrator = Depends(get_orchestrator),
-    current_user: User = Depends(require_roles(UserRole.ADMIN, UserRole.OPERATOR)),
+    current_user: User = Depends(get_current_user),  # Allow any authenticated user (demo mode)
     correlation_id: str = Depends(get_correlation_id),
     idempotency_key: Optional[str] = Depends(get_idempotency_key)
 ):

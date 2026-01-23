@@ -24,6 +24,9 @@ from pydantic import BaseModel
 from app.models.user import User, UserRole
 from app.models.wallet import WalletType, CustodyBackend
 from app.services.mpc_coordinator import MPCCoordinator
+from app.models.audit import Deposit
+from sqlalchemy import select, func
+from decimal import Decimal
 
 router = APIRouter(prefix="/v1/wallets", tags=["Wallets"])
 
@@ -304,6 +307,86 @@ async def get_wallet_balance(
             address=wallet.address,
             balance_eth=str(balance),
             balance_wei=str(balance_wei)
+        )
+    )
+
+
+class LedgerBalanceResponse(BaseModel):
+    """Ledger balance response (internal accounting balance)."""
+    wallet_id: str
+    address: str
+    available_eth: str
+    available_wei: str
+    pending_eth: str
+    pending_wei: str
+    total_credited: int
+    total_pending: int
+
+
+@router.get("/{wallet_id}/ledger-balance", response_model=CorrelatedResponse[LedgerBalanceResponse])
+async def get_wallet_ledger_balance(
+    wallet_id: str,
+    db: AsyncSession = Depends(get_db),
+    wallet_service: WalletService = Depends(get_wallet_service),
+    current_user: User = Depends(get_current_user),
+    correlation_id: str = Depends(get_correlation_id)
+):
+    """
+    Get the internal ledger balance of a wallet.
+
+    This returns the sum of all CREDITED deposits (available balance)
+    and PENDING_ADMIN deposits (pending balance).
+
+    This is the balance users can actually withdraw, not the on-chain balance.
+    """
+    wallet = await wallet_service.get_wallet(wallet_id)
+    if not wallet:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Wallet {wallet_id} not found"
+        )
+
+    if not wallet.address:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Wallet {wallet_id} has no address"
+        )
+
+    # Sum CREDITED deposits (available balance)
+    credited_result = await db.execute(
+        select(Deposit.amount)
+        .where(Deposit.wallet_id == wallet_id)
+        .where(Deposit.status == "CREDITED")
+    )
+    credited_deposits = credited_result.scalars().all()
+
+    # Sum PENDING_ADMIN deposits (pending balance)
+    pending_result = await db.execute(
+        select(Deposit.amount)
+        .where(Deposit.wallet_id == wallet_id)
+        .where(Deposit.status == "PENDING_ADMIN")
+    )
+    pending_deposits = pending_result.scalars().all()
+
+    # Calculate totals (amounts stored as strings in wei)
+    available_wei = sum(int(amt) for amt in credited_deposits) if credited_deposits else 0
+    pending_wei = sum(int(amt) for amt in pending_deposits) if pending_deposits else 0
+
+    # Convert to ETH
+    available_eth = Decimal(available_wei) / Decimal(10**18)
+    pending_eth = Decimal(pending_wei) / Decimal(10**18)
+
+    return CorrelatedResponse(
+        correlation_id=correlation_id,
+        data=LedgerBalanceResponse(
+            wallet_id=wallet_id,
+            address=wallet.address,
+            available_eth=str(available_eth),
+            available_wei=str(available_wei),
+            pending_eth=str(pending_eth),
+            pending_wei=str(pending_wei),
+            total_credited=len(credited_deposits),
+            total_pending=len(pending_deposits),
         )
     )
 

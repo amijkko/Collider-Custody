@@ -20,7 +20,8 @@ export default function ClientDashboard() {
   const [transactions, setTransactions] = React.useState<WithdrawRequest[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
   const [showCreateModal, setShowCreateModal] = React.useState(false);
-  const [balance, setBalance] = React.useState<number>(0);
+  const [availableBalance, setAvailableBalance] = React.useState<number>(0);
+  const [pendingBalance, setPendingBalance] = React.useState<number>(0);
 
   const loadData = React.useCallback(async () => {
     try {
@@ -31,15 +32,17 @@ export default function ClientDashboard() {
       // Only show MPC wallets to users (hide DEV_SIGNER)
       const mpcWallets = walletsRes.data.filter((w: WalletType) => w.custody_backend === 'MPC_TECDSA');
       setWallets(mpcWallets);
-      
-      // Load balance for primary MPC wallet
+
+      // Load ledger balance for primary MPC wallet
       const primaryMpc = mpcWallets.find((w: WalletType) => w.status === 'ACTIVE');
       if (primaryMpc) {
         try {
-          const balanceRes = await walletsApi.getBalance(primaryMpc.id);
-          setBalance(parseFloat(balanceRes.data.balance_eth));
+          const balanceRes = await walletsApi.getLedgerBalance(primaryMpc.id);
+          setAvailableBalance(parseFloat(balanceRes.data.available_eth));
+          setPendingBalance(parseFloat(balanceRes.data.pending_eth));
         } catch {
-          setBalance(0);
+          setAvailableBalance(0);
+          setPendingBalance(0);
         }
       }
       
@@ -129,21 +132,21 @@ export default function ClientDashboard() {
               {primaryWallet ? (
                 <div className="grid grid-cols-3 gap-6">
                   <div>
-                    <p className="text-sm text-surface-500">Pending</p>
-                    <p className="text-2xl font-semibold text-surface-100">
-                      0 <span className="text-sm text-surface-500">ETH</span>
+                    <p className="text-sm text-surface-500">Pending Approval</p>
+                    <p className="text-2xl font-semibold text-amber-400">
+                      {pendingBalance.toFixed(6)} <span className="text-sm text-amber-400/60">ETH</span>
                     </p>
                   </div>
                   <div>
                     <p className="text-sm text-surface-500">Available</p>
                     <p className="text-2xl font-semibold text-emerald-400">
-                      {balance.toFixed(6)} <span className="text-sm text-emerald-400/60">ETH</span>
+                      {availableBalance.toFixed(6)} <span className="text-sm text-emerald-400/60">ETH</span>
                     </p>
                   </div>
                   <div>
-                    <p className="text-sm text-surface-500">Locked</p>
-                    <p className="text-2xl font-semibold text-amber-400">
-                      0 <span className="text-sm text-amber-400/60">ETH</span>
+                    <p className="text-sm text-surface-500">Total</p>
+                    <p className="text-2xl font-semibold text-surface-100">
+                      {(availableBalance + pendingBalance).toFixed(6)} <span className="text-sm text-surface-500">ETH</span>
                     </p>
                   </div>
                 </div>

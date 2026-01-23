@@ -12,7 +12,7 @@ from web3 import Web3
 
 from app.models.tx_request import TxRequest, TxType, TxStatus, Approval, VALID_TRANSITIONS
 from app.models.wallet import Wallet, WalletRoleType, CustodyBackend
-from app.models.audit import AuditEventType
+from app.models.audit import AuditEventType, Deposit
 from app.models.mpc import SigningPermit
 from app.services.audit import AuditService
 from app.services.kyt import KYTService, KYTResult
@@ -77,7 +77,24 @@ class TxOrchestrator:
         wallet = wallet_result.scalar_one_or_none()
         if not wallet:
             raise ValueError(f"Wallet {tx_data.wallet_id} not found")
-        
+
+        # Check ledger balance for MPC wallets (only CREDITED deposits are withdrawable)
+        if wallet.custody_backend == CustodyBackend.MPC_TECDSA:
+            credited_result = await self.db.execute(
+                select(Deposit.amount)
+                .where(Deposit.wallet_id == tx_data.wallet_id)
+                .where(Deposit.status == "CREDITED")
+            )
+            credited_amounts = credited_result.scalars().all()
+            available_wei = sum(int(amt) for amt in credited_amounts) if credited_amounts else 0
+            available_eth = Decimal(available_wei) / Decimal(10**18)
+
+            requested_amount = Decimal(tx_data.amount)
+            if requested_amount > available_eth:
+                raise ValueError(
+                    f"Insufficient balance. Available: {available_eth} ETH, Requested: {requested_amount} ETH"
+                )
+
         # Create transaction request
         tx = TxRequest(
             id=str(uuid4()),

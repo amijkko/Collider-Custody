@@ -39,12 +39,12 @@ export default function WithdrawPage() {
       );
       setWallet(mpcWallet || null);
       
-      // Load balance if wallet found
+      // Load ledger balance if wallet found (only CREDITED deposits are available)
       if (mpcWallet) {
         setIsLoadingBalance(true);
         try {
-          const balanceRes = await walletsApi.getBalance(mpcWallet.id);
-          setAvailableBalance(parseFloat(balanceRes.data.balance_eth));
+          const balanceRes = await walletsApi.getLedgerBalance(mpcWallet.id);
+          setAvailableBalance(parseFloat(balanceRes.data.available_eth));
         } catch (balErr) {
           console.error('Failed to load balance:', balErr);
           setAvailableBalance(0);

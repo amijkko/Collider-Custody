@@ -156,6 +156,19 @@ export const walletsApi = {
   getBalance: async (walletId: string) => {
     return apiFetch<{ wallet_id: string; address: string; balance_eth: string; balance_wei: string }>(`/v1/wallets/${walletId}/balance`);
   },
+
+  getLedgerBalance: async (walletId: string) => {
+    return apiFetch<{
+      wallet_id: string;
+      address: string;
+      available_eth: string;
+      available_wei: string;
+      pending_eth: string;
+      pending_wei: string;
+      total_credited: number;
+      total_pending: number;
+    }>(`/v1/wallets/${walletId}/ledger-balance`);
+  },
 };
 
 // Transaction Requests (Withdrawals) API
