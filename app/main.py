@@ -23,6 +23,10 @@ from app.api import (
 from app.api.deposits import router as deposits_router
 from app.api.mpc_websocket import router as mpc_ws_router
 from app.services.chain_listener import ChainListener
+from app.services.mpc_grpc_client import (
+    initialize_mpc_signer_client,
+    shutdown_mpc_signer_client,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -53,11 +57,25 @@ async def lifespan(app: FastAPI):
     )
     chain_listener_task = asyncio.create_task(chain_listener.start())
     logger.info("Chain listener started")
-    
+
+    # Initialize MPC signer client if enabled
+    if settings.mpc_signer_enabled:
+        logger.info(f"Connecting to MPC signer at {settings.mpc_signer_url}...")
+        await initialize_mpc_signer_client()
+        logger.info("MPC signer client initialized")
+    else:
+        logger.info("MPC signer disabled (using dev signer)")
+
     yield
     
     # Shutdown
     logger.info("Shutting down...")
+
+    # Shutdown MPC client
+    if settings.mpc_signer_enabled:
+        await shutdown_mpc_signer_client()
+        logger.info("MPC signer client disconnected")
+
     if chain_listener:
         await chain_listener.stop()
     if chain_listener_task:
@@ -66,7 +84,7 @@ async def lifespan(app: FastAPI):
             await chain_listener_task
         except asyncio.CancelledError:
             pass
-    
+
     logger.info("Shutdown complete")
 
 

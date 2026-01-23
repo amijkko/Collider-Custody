@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     # MPC Signer (Bank Node)
     mpc_signer_url: str = "localhost:50051"
     mpc_signer_enabled: bool = False  # Set to True when using real MPC
+    mpc_permit_secret: str = "dev_permit_secret_minimum_32_characters_long"
     
     @property
     def kyt_blacklist_addresses(self) -> List[str]:

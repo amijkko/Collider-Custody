@@ -38,6 +38,10 @@ services:
       DEV_SIGNER_PRIVATE_KEY: ${DEV_SIGNER_PRIVATE_KEY:-0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80}
       JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_change_in_production}
       ENVIRONMENT: development
+      # MPC Signer configuration
+      MPC_SIGNER_URL: mpc-signer:50051
+      MPC_SIGNER_ENABLED: ${MPC_SIGNER_ENABLED:-false}
+      MPC_PERMIT_SECRET: ${MPC_PERMIT_SECRET:-dev_permit_secret_minimum_32_characters_long}
     ports:
       - "8000:8000"
     depends_on:
@@ -74,6 +78,7 @@ services:
     container_name: collider-mpc-signer
     environment:
       MPC_STORAGE_PASSWORD: ${MPC_STORAGE_PASSWORD:-dev_mpc_password_change_in_production}
+      MPC_PERMIT_SECRET: ${MPC_PERMIT_SECRET:-dev_permit_secret_minimum_32_characters_long}
       MPC_NODE_ID: bank-node-1
       MPC_LOG_LEVEL: info
     ports:

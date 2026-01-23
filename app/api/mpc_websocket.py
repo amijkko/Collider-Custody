@@ -376,10 +376,12 @@ async def handle_dkg_round(
     
     try:
         # Process round on bank signer
+        # User is party 1, so we include the party index
+        incoming_messages = [(1, user_message)] if user_message else []
         success, out_msg, result, is_final, error = await mpc_client.process_dkg_round(
             session_id=session_id,
             round_num=round_num,
-            incoming_messages=[user_message] if user_message else [],
+            incoming_messages=incoming_messages,
         )
         
         if not success:
@@ -409,8 +411,8 @@ async def handle_dkg_round(
                 "data": {
                     "keyset_id": result.keyset_id,
                     "ethereum_address": result.ethereum_address,
-                    "public_key": result.public_key.hex(),
-                    "user_share": result.user_share.hex() if result.user_share else None,
+                    "public_key": result.public_key.hex() if isinstance(result.public_key, bytes) else result.public_key,
+                    "public_key_full": result.public_key_full.hex() if isinstance(result.public_key_full, bytes) else result.public_key_full,
                 }
             })
             
@@ -539,10 +541,12 @@ async def handle_sign_round(
     
     try:
         # Process round on bank signer
+        # User is party 1
+        incoming_messages = [(1, user_message)] if user_message else []
         success, out_msg, result, is_final, error = await mpc_client.process_signing_round(
             session_id=session_id,
             round_num=round_num,
-            incoming_messages=[user_message] if user_message else [],
+            incoming_messages=incoming_messages,
         )
         
         if not success:
