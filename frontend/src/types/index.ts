@@ -67,11 +67,11 @@ export interface Deposit {
   from_address: string;
   amount: string;
   asset: string;
+  block_number?: number;
   status: DepositStatus;
-  confirmations: number;
   kyt_result: KYTResult | null;
-  created_at: string;
-  updated_at: string;
+  kyt_case_id?: string | null;
+  detected_at: string;
   approved_by: string | null;
   approved_at: string | null;
 }

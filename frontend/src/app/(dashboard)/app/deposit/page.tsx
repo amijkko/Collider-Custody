@@ -179,7 +179,7 @@ export default function DepositPage() {
                             From: {formatAddress(deposit.from_address)}
                           </p>
                           <p className="text-sm text-surface-500">
-                            {formatRelativeTime(deposit.created_at)} · Tx: {formatAddress(deposit.tx_hash)}
+                            {formatRelativeTime(deposit.detected_at)} · Tx: {formatAddress(deposit.tx_hash)}
                           </p>
                         </div>
                       </div>
