@@ -82,6 +82,13 @@ yarn-error.log*
 mpc-signer/data/
 *.share
 
+# Playwright
+playwright-report/
+playwright/.cache/
+test-results/
+e2e/.auth/*.json
+!e2e/.auth/.gitkeep
+
 # Docker volumes
 postgres_data/
 mpc_shares/
