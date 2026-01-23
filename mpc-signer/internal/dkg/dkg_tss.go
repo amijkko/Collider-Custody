@@ -98,12 +98,13 @@ func (h *DKGHandler) StartSession(
 		zap.Int("total_parties", totalParties),
 	)
 
+	// Create party IDs with 1-indexed keys (tss-lib requires Key > 0)
 	partyIDs := make([]*tss.PartyID, totalParties)
 	for i := 0; i < totalParties; i++ {
 		partyIDs[i] = tss.NewPartyID(
 			fmt.Sprintf("party-%d", i),
 			fmt.Sprintf("Party %d", i),
-			big.NewInt(int64(i)),
+			big.NewInt(int64(i+1)), // 1-indexed for tss-lib
 		)
 	}
 
@@ -113,11 +114,19 @@ func (h *DKGHandler) StartSession(
 	ctx := tss.NewPeerContext(sortedPartyIDs)
 	params := tss.NewParameters(tss.S256(), ctx, thisPartyID, totalParties, threshold)
 
+	// Generate preParams (safe primes) - this is computationally expensive
+	h.logger.Info("Generating DKG pre-parameters (this may take a moment)...")
+	preParams, err := keygen.GeneratePreParams(1 * time.Minute)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to generate preParams: %w", err)
+	}
+	h.logger.Info("Pre-parameters generated successfully")
+
 	outCh := make(chan tss.Message, 100)
 	endCh := make(chan keygen.LocalPartySaveData, 1)
 	errCh := make(chan *tss.Error, 1)
 
-	party := keygen.NewLocalParty(params, outCh, endCh)
+	party := keygen.NewLocalParty(params, outCh, endCh, *preParams)
 
 	session := &DKGSession{
 		SessionID:    sessionID,
@@ -140,7 +149,7 @@ func (h *DKGHandler) StartSession(
 	go func() {
 		if err := party.Start(); err != nil {
 			h.logger.Error("Failed to start DKG party", zap.Error(err))
-			errCh <- &tss.Error{Cause: err}
+			errCh <- err
 		}
 	}()
 
@@ -266,17 +275,21 @@ func (h *DKGHandler) CleanupSession(sessionID string) {
 func (s *DKGSession) collectOutgoingMessages() ([]byte, error) {
 	var messages []OutgoingMessage
 
+	s.logger.Debug("Collecting outgoing messages...")
+
 	// First, try to get at least one message with a longer timeout
 	select {
 	case msg := <-s.outCh:
+		s.logger.Debug("Received message from outCh")
 		outMsg, err := s.convertTSSMessage(msg)
 		if err != nil {
 			s.logger.Warn("Failed to convert message", zap.Error(err))
 		} else {
 			messages = append(messages, outMsg...)
 		}
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(2 * time.Second):
 		// No messages available yet
+		s.logger.Debug("Timeout waiting for messages")
 		return nil, nil
 	}
 
@@ -349,10 +362,7 @@ func buildResultFromSaveData(sessionID string, saveData keygen.LocalPartySaveDat
 		return nil, fmt.Errorf("missing public key in save data")
 	}
 
-	publicKey, err := saveData.ECDSAPub.ToECDSAPubKey()
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert public key: %w", err)
-	}
+	publicKey := saveData.ECDSAPub.ToECDSAPubKey()
 
 	pubKeyCompressed := serializeCompressedPublicKey(publicKey)
 	pubKeyFull := serializeUncompressedPublicKey(publicKey)

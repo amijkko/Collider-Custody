@@ -40,12 +40,12 @@ type SigningSession struct {
 
 	party     tss.Party
 	outCh     chan tss.Message
-	endCh     chan *common.SignatureData
+	endCh     chan common.SignatureData
 	errCh     chan *tss.Error
 	params    *tss.Parameters
 	partyIDs  tss.SortedPartyIDs
-	signature *common.SignatureData
-	publicKey *ecdsa.PublicKey // For signature verification
+	signature *common.SignatureData // Stored as pointer
+	publicKey *ecdsa.PublicKey      // For signature verification
 
 	mu sync.Mutex
 
@@ -108,19 +108,16 @@ func (h *SigningHandler) StartSession(
 	// Extract public key for signature verification
 	var publicKey *ecdsa.PublicKey
 	if saveData.ECDSAPub != nil {
-		var err error
-		publicKey, err = saveData.ECDSAPub.ToECDSAPubKey()
-		if err != nil {
-			h.logger.Warn("Failed to extract public key from save data", zap.Error(err))
-		}
+		publicKey = saveData.ECDSAPub.ToECDSAPubKey()
 	}
 
+	// Create party IDs with 1-indexed keys (tss-lib requires Key > 0)
 	partyIDs := make([]*tss.PartyID, totalParties)
 	for i := 0; i < totalParties; i++ {
 		partyIDs[i] = tss.NewPartyID(
 			fmt.Sprintf("party-%d", i),
 			fmt.Sprintf("Party %d", i),
-			big.NewInt(int64(i)),
+			big.NewInt(int64(i+1)), // 1-indexed for tss-lib
 		)
 	}
 
@@ -132,7 +129,7 @@ func (h *SigningHandler) StartSession(
 	params := tss.NewParameters(tss.S256(), ctx, thisPartyID, len(signingPartyIDs), threshold)
 
 	outCh := make(chan tss.Message, 100)
-	endCh := make(chan *common.SignatureData, 1)
+	endCh := make(chan common.SignatureData, 1)
 	errCh := make(chan *tss.Error, 1)
 
 	msgHashBigInt := new(big.Int).SetBytes(messageHash)
@@ -159,7 +156,7 @@ func (h *SigningHandler) StartSession(
 	go func() {
 		if err := party.Start(); err != nil {
 			h.logger.Error("Failed to start signing party", zap.Error(err))
-			errCh <- &tss.Error{Cause: err}
+			errCh <- err
 		}
 	}()
 
@@ -230,7 +227,7 @@ func (h *SigningHandler) ProcessRound(
 	// Check for completion or errors with a small timeout to allow async processing
 	select {
 	case sigData := <-session.endCh:
-		session.signature = sigData
+		session.signature = &sigData
 		result := session.buildResult()
 
 		// Verify signature before returning
