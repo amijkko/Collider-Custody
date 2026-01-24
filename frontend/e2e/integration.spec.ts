@@ -12,7 +12,7 @@ import { test, expect, Page, BrowserContext } from '@playwright/test';
  * - Navigation and UI components
  */
 
-const API_URL = process.env.E2E_API_URL || 'https://discerning-rebirth-production.up.railway.app';
+const API_URL = process.env.E2E_API_URL || 'http://localhost:8000';
 
 // Use existing test user (created by backend E2E test) or fallback
 const TEST_USER = {

@@ -77,10 +77,13 @@ class SigningService:
         Returns: (signed_tx_hex, tx_hash)
         """
         # Build transaction dict
+        # Amount is stored in wei as Decimal
+        value_wei = int(tx_request.amount) if tx_request.asset == "ETH" else 0
+
         tx_dict = {
             "nonce": nonce,
             "to": Web3.to_checksum_address(tx_request.to_address),
-            "value": int(tx_request.amount) if tx_request.asset == "ETH" else 0,  # amount is already in wei
+            "value": value_wei,
             "gas": gas_limit,
             "chainId": chain_id,
         }

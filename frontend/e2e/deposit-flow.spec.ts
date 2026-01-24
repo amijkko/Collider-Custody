@@ -11,12 +11,12 @@ import { test, expect, Page } from '@playwright/test';
  * 5. Balance verification
  */
 
-const API_URL = process.env.E2E_API_URL || 'https://discerning-rebirth-production.up.railway.app';
+const API_URL = process.env.E2E_API_URL || 'http://localhost:8000';
 
 // Test credentials
 const ADMIN_USER = {
-  username: 'e2e_bot',
-  password: 'E2eTestPass2026',
+  username: 'admin2',
+  password: 'admin123456',
 };
 
 // Generate unique test user

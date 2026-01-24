@@ -12,8 +12,8 @@ export default defineConfig({
   reporter: 'html',
 
   use: {
-    // Base URL for tests - use env var or production Vercel deployment
-    baseURL: process.env.E2E_BASE_URL || 'https://collider-cust.vercel.app',
+    // Base URL for tests - use env var or local dev server
+    baseURL: process.env.E2E_BASE_URL || 'http://localhost:3000',
 
     // Collect trace when retrying the failed test
     trace: 'on-first-retry',

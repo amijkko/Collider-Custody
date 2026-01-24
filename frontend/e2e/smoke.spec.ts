@@ -104,7 +104,7 @@ test.describe('Smoke Tests', () => {
   });
 
   test('API health check', async ({ request }) => {
-    const apiUrl = process.env.E2E_API_URL || 'https://discerning-rebirth-production.up.railway.app';
+    const apiUrl = process.env.E2E_API_URL || 'http://localhost:8000';
 
     const response = await request.get(`${apiUrl}/health`);
     expect(response.ok()).toBeTruthy();

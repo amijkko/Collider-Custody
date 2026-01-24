@@ -1,11 +1,11 @@
 import { test as setup, expect } from '@playwright/test';
 
-const API_URL = process.env.E2E_API_URL || 'https://discerning-rebirth-production.up.railway.app';
+const API_URL = process.env.E2E_API_URL || 'http://localhost:8000';
 
 // Test credentials
 export const E2E_ADMIN = {
-  username: 'e2e_bot',
-  password: 'E2eTestPass2026',
+  username: 'admin2',
+  password: 'admin123456',
 };
 
 // User created by backend E2E test

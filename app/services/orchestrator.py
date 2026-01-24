@@ -214,10 +214,12 @@ class TxOrchestrator:
         await self._transition_status(tx, TxStatus.POLICY_EVAL_PENDING, correlation_id, actor_id)
 
         # Evaluate using v2 engine
+        # Convert wei to ETH for policy evaluation (policy rules use ETH thresholds)
+        amount_eth = Decimal(tx.amount) / Decimal(10**18)
         result: PolicyEvalResult = await self.policy_v2.evaluate(
             user_id=actor_id,
             to_address=tx.to_address,
-            amount=tx.amount,
+            amount=amount_eth,
             asset=tx.asset,
             wallet=wallet,
             tx_request_id=tx.id,

@@ -160,14 +160,14 @@ class PolicyRule(Base):
             if amount <= Decimal(str(conditions["amount_gt"])):
                 return False
 
-        # Check address conditions
-        if "address_in" in conditions:
-            required_status = conditions["address_in"]
+        # Check address conditions (support both 'address_in' and 'to_address_in')
+        required_status = conditions.get("address_in") or conditions.get("to_address_in")
+        if required_status:
             if address_status != required_status:
                 return False
 
-        if "address_not_in" in conditions:
-            forbidden_status = conditions["address_not_in"]
+        forbidden_status = conditions.get("address_not_in") or conditions.get("to_address_not_in")
+        if forbidden_status:
             if address_status == forbidden_status:
                 return False
 
