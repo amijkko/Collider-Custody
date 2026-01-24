@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { ArrowDownLeft, RefreshCw, Check, X, ExternalLink } from 'lucide-react';
+import { ArrowDownLeft, RefreshCw, Check, X, ExternalLink, Shield, FileText } from 'lucide-react';
 import { Header, PageContainer } from '@/components/layout/header';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -19,6 +19,8 @@ import { useToastHelpers } from '@/hooks/use-toast';
 import { depositsApi } from '@/lib/api';
 import { formatAddress, formatEth, formatRelativeTime, getExplorerLink } from '@/lib/utils';
 import { Deposit } from '@/types';
+import { BitOKReport } from '@/components/kyt/BitOKReport';
+import { DepositAuditModal } from '@/components/audit/DepositAuditModal';
 
 export default function AdminDepositsPage() {
   const toast = useToastHelpers();
@@ -28,6 +30,7 @@ export default function AdminDepositsPage() {
   const [actionType, setActionType] = React.useState<'approve' | 'reject' | null>(null);
   const [rejectReason, setRejectReason] = React.useState('');
   const [isProcessing, setIsProcessing] = React.useState(false);
+  const [auditDeposit, setAuditDeposit] = React.useState<Deposit | null>(null);
 
   const loadData = React.useCallback(async () => {
     setIsLoading(true);
@@ -204,6 +207,7 @@ export default function AdminDepositsPage() {
                         <th className="text-left py-3 px-4 text-sm font-medium text-surface-400">Status</th>
                         <th className="text-left py-3 px-4 text-sm font-medium text-surface-400">Time</th>
                         <th className="text-left py-3 px-4 text-sm font-medium text-surface-400">Approved By</th>
+                        <th className="text-left py-3 px-4 text-sm font-medium text-surface-400">Audit</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -227,6 +231,16 @@ export default function AdminDepositsPage() {
                           <td className="py-3 px-4 text-sm text-surface-400">
                             {deposit.approved_by || '—'}
                           </td>
+                          <td className="py-3 px-4">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setAuditDeposit(deposit)}
+                              className="text-surface-400 hover:text-brand-400"
+                            >
+                              <FileText className="h-4 w-4" />
+                            </Button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -242,22 +256,24 @@ export default function AdminDepositsPage() {
         </div>
       </PageContainer>
 
-      {/* Confirmation Modal */}
+      {/* Confirmation Modal with BitOK Report */}
       <Dialog open={!!selectedDeposit && !!actionType} onOpenChange={() => { setSelectedDeposit(null); setActionType(null); }}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>
+            <DialogTitle className="flex items-center gap-2">
+              <Shield className="h-5 w-5 text-brand-400" />
               {actionType === 'approve' ? 'Approve Deposit' : 'Reject Deposit'}
             </DialogTitle>
             <DialogDescription>
-              {actionType === 'approve' 
-                ? 'This will credit the funds to the user\'s available balance.'
+              {actionType === 'approve'
+                ? 'Review the KYT report below before approving. Funds will be credited to the user\'s available balance.'
                 : 'This will reject the deposit and funds will not be credited.'}
             </DialogDescription>
           </DialogHeader>
 
           {selectedDeposit && (
-            <div className="py-4">
+            <div className="py-4 space-y-4">
+              {/* Deposit Summary */}
               <div className="p-4 rounded-lg bg-surface-800/50 border border-surface-700 space-y-2">
                 <div className="flex justify-between text-sm">
                   <span className="text-surface-400">From</span>
@@ -272,6 +288,16 @@ export default function AdminDepositsPage() {
                   <StatusBadge status={selectedDeposit.kyt_result || 'N/A'} />
                 </div>
               </div>
+
+              {/* BitOK KYT Report */}
+              <BitOKReport
+                deposit={{
+                  tx_hash: selectedDeposit.tx_hash,
+                  from_address: selectedDeposit.from_address,
+                  amount: selectedDeposit.amount,
+                  wallet_id: selectedDeposit.wallet_id,
+                }}
+              />
 
               {actionType === 'reject' && (
                 <div className="mt-4">
@@ -290,7 +316,7 @@ export default function AdminDepositsPage() {
             <Button variant="outline" onClick={() => { setSelectedDeposit(null); setActionType(null); }}>
               Cancel
             </Button>
-            <Button 
+            <Button
               variant={actionType === 'approve' ? 'success' : 'destructive'}
               onClick={handleAction}
               isLoading={isProcessing}
@@ -300,6 +326,13 @@ export default function AdminDepositsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Audit Trail Modal */}
+      <DepositAuditModal
+        deposit={auditDeposit}
+        open={!!auditDeposit}
+        onClose={() => setAuditDeposit(null)}
+      />
     </>
   );
 }

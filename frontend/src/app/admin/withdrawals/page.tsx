@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { ArrowUpRight, RefreshCw, Check, X, Clock, Shield, ExternalLink } from 'lucide-react';
+import { ArrowUpRight, RefreshCw, Check, X, Clock, Shield, ExternalLink, FileText } from 'lucide-react';
 import { Header, PageContainer } from '@/components/layout/header';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -19,6 +19,7 @@ import { useToastHelpers } from '@/hooks/use-toast';
 import { txRequestsApi } from '@/lib/api';
 import { formatAddress, formatEth, formatRelativeTime, getExplorerLink } from '@/lib/utils';
 import { WithdrawRequest } from '@/types';
+import { TransactionAuditModal } from '@/components/audit/TransactionAuditModal';
 
 export default function AdminWithdrawalsPage() {
   const toast = useToastHelpers();
@@ -28,6 +29,7 @@ export default function AdminWithdrawalsPage() {
   const [actionType, setActionType] = React.useState<'approve' | 'reject' | null>(null);
   const [rejectReason, setRejectReason] = React.useState('');
   const [isProcessing, setIsProcessing] = React.useState(false);
+  const [auditTx, setAuditTx] = React.useState<WithdrawRequest | null>(null);
 
   const loadData = React.useCallback(async () => {
     try {
@@ -218,6 +220,7 @@ export default function AdminWithdrawalsPage() {
                         <th className="text-left py-3 px-4 text-sm font-medium text-surface-400">Approvals</th>
                         <th className="text-left py-3 px-4 text-sm font-medium text-surface-400">TX Hash</th>
                         <th className="text-left py-3 px-4 text-sm font-medium text-surface-400">Time</th>
+                        <th className="text-left py-3 px-4 text-sm font-medium text-surface-400">Audit</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -252,6 +255,16 @@ export default function AdminWithdrawalsPage() {
                           </td>
                           <td className="py-3 px-4 text-sm text-surface-500">
                             {formatRelativeTime(tx.created_at)}
+                          </td>
+                          <td className="py-3 px-4">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setAuditTx(tx)}
+                              className="text-surface-400 hover:text-brand-400"
+                            >
+                              <FileText className="h-4 w-4" />
+                            </Button>
                           </td>
                         </tr>
                       ))}
@@ -334,6 +347,13 @@ export default function AdminWithdrawalsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Audit Trail Modal */}
+      <TransactionAuditModal
+        txRequest={auditTx}
+        open={!!auditTx}
+        onClose={() => setAuditTx(null)}
+      />
     </>
   );
 }

@@ -441,6 +441,8 @@ class WalletService:
     
     async def get_all_addresses(self) -> List[str]:
         """Get all wallet addresses for chain listener monitoring."""
-        result = await self.db.execute(select(Wallet.address))
-        return [r[0] for r in result.all()]
+        result = await self.db.execute(
+            select(Wallet.address).where(Wallet.address.isnot(None)).where(Wallet.address != "")
+        )
+        return [r[0] for r in result.all() if r[0]]
 

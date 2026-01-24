@@ -443,3 +443,186 @@ class PolicySetService:
         )
 
         return assignment
+
+    async def update_policy_set(
+        self,
+        policy_set_id: str,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        is_active: Optional[bool] = None,
+        actor_id: Optional[str] = None,
+        correlation_id: str = "",
+    ) -> Optional[PolicySet]:
+        """Update a policy set."""
+        policy_set = await self.get_policy_set(policy_set_id)
+        if not policy_set:
+            return None
+
+        changes = {}
+        if name is not None:
+            changes['name'] = name
+            policy_set.name = name
+        if description is not None:
+            changes['description'] = description
+            policy_set.description = description
+        if is_active is not None:
+            changes['is_active'] = is_active
+            policy_set.is_active = is_active
+
+        await self.db.flush()
+
+        await self.audit.log_event(
+            event_type=AuditEventType.POLICY_SET_UPDATED,
+            correlation_id=correlation_id,
+            actor_id=actor_id,
+            entity_type="POLICY_SET",
+            entity_id=policy_set_id,
+            payload=changes,
+        )
+
+        return policy_set
+
+    async def delete_policy_set(
+        self,
+        policy_set_id: str,
+        actor_id: Optional[str] = None,
+        correlation_id: str = "",
+    ) -> bool:
+        """Delete a policy set if not assigned to any group."""
+        # Check if assigned
+        result = await self.db.execute(
+            select(GroupPolicy).where(GroupPolicy.policy_set_id == policy_set_id)
+        )
+        if result.scalar_one_or_none():
+            return False  # Cannot delete - assigned to a group
+
+        policy_set = await self.get_policy_set(policy_set_id)
+        if not policy_set:
+            return False
+
+        policy_name = policy_set.name
+        policy_version = policy_set.version
+
+        # Delete all rules first
+        for rule in policy_set.rules:
+            await self.db.delete(rule)
+
+        await self.db.delete(policy_set)
+        await self.db.flush()
+
+        await self.audit.log_event(
+            event_type=AuditEventType.POLICY_SET_DELETED,
+            correlation_id=correlation_id,
+            actor_id=actor_id,
+            entity_type="POLICY_SET",
+            entity_id=policy_set_id,
+            payload={"name": policy_name, "version": policy_version},
+        )
+
+        return True
+
+    async def update_rule(
+        self,
+        policy_set_id: str,
+        rule_id: str,
+        priority: Optional[int] = None,
+        conditions: Optional[Dict[str, Any]] = None,
+        decision: Optional[PolicyDecision] = None,
+        kyt_required: Optional[bool] = None,
+        approval_required: Optional[bool] = None,
+        approval_count: Optional[int] = None,
+        description: Optional[str] = None,
+        actor_id: Optional[str] = None,
+        correlation_id: str = "",
+    ) -> Optional[PolicyRule]:
+        """Update a policy rule."""
+        result = await self.db.execute(
+            select(PolicyRule)
+            .where(PolicyRule.policy_set_id == policy_set_id)
+            .where(PolicyRule.rule_id == rule_id)
+        )
+        rule = result.scalar_one_or_none()
+        if not rule:
+            return None
+
+        changes = {}
+        if priority is not None:
+            changes['priority'] = priority
+            rule.priority = priority
+        if conditions is not None:
+            changes['conditions'] = conditions
+            rule.conditions = conditions
+        if decision is not None:
+            changes['decision'] = decision.value
+            rule.decision = decision
+        if kyt_required is not None:
+            changes['kyt_required'] = kyt_required
+            rule.kyt_required = kyt_required
+        if approval_required is not None:
+            changes['approval_required'] = approval_required
+            rule.approval_required = approval_required
+        if approval_count is not None:
+            changes['approval_count'] = approval_count
+            rule.approval_count = approval_count
+        if description is not None:
+            changes['description'] = description
+            rule.description = description
+
+        await self.db.flush()
+
+        # Update snapshot hash
+        policy_set = await self.get_policy_set(policy_set_id)
+        if policy_set:
+            policy_set.update_snapshot_hash()
+            await self.db.flush()
+
+        await self.audit.log_event(
+            event_type=AuditEventType.POLICY_RULE_UPDATED,
+            correlation_id=correlation_id,
+            actor_id=actor_id,
+            entity_type="POLICY_SET",
+            entity_id=policy_set_id,
+            entity_refs={"rule_id": rule.id},
+            payload={"rule_id": rule_id, **changes},
+        )
+
+        return rule
+
+    async def delete_rule(
+        self,
+        policy_set_id: str,
+        rule_id: str,
+        actor_id: Optional[str] = None,
+        correlation_id: str = "",
+    ) -> bool:
+        """Delete a rule from a policy set."""
+        result = await self.db.execute(
+            select(PolicyRule)
+            .where(PolicyRule.policy_set_id == policy_set_id)
+            .where(PolicyRule.rule_id == rule_id)
+        )
+        rule = result.scalar_one_or_none()
+        if not rule:
+            return False
+
+        rule_db_id = rule.id
+        await self.db.delete(rule)
+        await self.db.flush()
+
+        # Update snapshot hash
+        policy_set = await self.get_policy_set(policy_set_id)
+        if policy_set:
+            policy_set.update_snapshot_hash()
+            await self.db.flush()
+
+        await self.audit.log_event(
+            event_type=AuditEventType.POLICY_RULE_DELETED,
+            correlation_id=correlation_id,
+            actor_id=actor_id,
+            entity_type="POLICY_SET",
+            entity_id=policy_set_id,
+            entity_refs={"rule_id": rule_db_id},
+            payload={"rule_id": rule_id},
+        )
+
+        return True

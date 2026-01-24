@@ -1,5 +1,8 @@
 """Deposits API endpoints."""
-from typing import Optional
+import hashlib
+import json
+from datetime import datetime
+from typing import Optional, List
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -8,11 +11,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models.audit import Deposit, AuditEventType
+from app.models.audit import Deposit, AuditEventType, AuditEvent
 from app.models.wallet import Wallet
 from app.models.user import User, UserRole
 from app.api.deps import get_current_user, require_roles, get_correlation_id
 from app.services.audit import AuditService
+from app.schemas.audit import AuditEventResponse
 
 router = APIRouter(prefix="/v1/deposits", tags=["Deposits"])
 
@@ -52,6 +56,17 @@ class ApproveDepositRequest(BaseModel):
 class RejectDepositRequest(BaseModel):
     """Request to reject a deposit."""
     reason: Optional[str] = None
+
+
+class DepositAuditPackageResponse(BaseModel):
+    """Deposit audit package response."""
+    deposit_id: str
+    deposit: dict
+    kyt_evaluation: Optional[dict] = None
+    admin_decision: Optional[dict] = None
+    audit_events: List[AuditEventResponse]
+    package_hash: str
+    generated_at: datetime
 
 
 def _deposit_to_response(deposit: Deposit) -> DepositResponse:
@@ -260,6 +275,132 @@ async def approve_deposit(
     await db.refresh(deposit)
     
     return _deposit_to_response(deposit)
+
+
+@router.get("/{deposit_id}/audit", response_model=DepositAuditPackageResponse)
+async def get_deposit_audit_package(
+    deposit_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.ADMIN, UserRole.COMPLIANCE)),
+    correlation_id: str = Depends(get_correlation_id),
+):
+    """Get audit package for a deposit (admin/compliance only)."""
+    # Get deposit
+    result = await db.execute(
+        select(Deposit).where(Deposit.id == deposit_id)
+    )
+    deposit = result.scalar_one_or_none()
+
+    if not deposit:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Deposit not found"
+        )
+
+    # Get wallet info
+    wallet_result = await db.execute(
+        select(Wallet).where(Wallet.id == deposit.wallet_id)
+    )
+    wallet = wallet_result.scalar_one_or_none()
+
+    # Get all related audit events
+    # Events can be linked via entity_refs containing deposit_id or wallet_id
+    events_result = await db.execute(
+        select(AuditEvent)
+        .where(
+            (AuditEvent.entity_id == str(deposit.wallet_id)) |
+            (AuditEvent.entity_refs.contains({"deposit_id": str(deposit_id)}))
+        )
+        .where(
+            AuditEvent.event_type.in_([
+                AuditEventType.DEPOSIT_DETECTED,
+                AuditEventType.DEPOSIT_KYT_EVALUATED,
+                AuditEventType.KYT_CASE_CREATED,
+                AuditEventType.DEPOSIT_APPROVED,
+                AuditEventType.DEPOSIT_REJECTED,
+            ])
+        )
+        .order_by(AuditEvent.sequence_number.asc())
+    )
+    events = list(events_result.scalars().all())
+
+    # Extract KYT evaluation info
+    kyt_eval = None
+    admin_decision = None
+
+    for event in events:
+        if event.event_type == AuditEventType.DEPOSIT_KYT_EVALUATED:
+            kyt_eval = event.payload
+        elif event.event_type == AuditEventType.DEPOSIT_APPROVED:
+            admin_decision = {
+                "decision": "APPROVED",
+                "decided_by": event.actor_id,
+                "decided_at": event.timestamp.isoformat(),
+                "payload": event.payload,
+            }
+        elif event.event_type == AuditEventType.DEPOSIT_REJECTED:
+            admin_decision = {
+                "decision": "REJECTED",
+                "decided_by": event.actor_id,
+                "decided_at": event.timestamp.isoformat(),
+                "reason": event.payload.get("reason") if event.payload else None,
+                "payload": event.payload,
+            }
+
+    # Build deposit info
+    deposit_info = {
+        "id": str(deposit.id),
+        "wallet_id": str(deposit.wallet_id),
+        "wallet_address": wallet.address if wallet else None,
+        "tx_hash": deposit.tx_hash,
+        "from_address": deposit.from_address,
+        "asset": deposit.asset,
+        "amount": deposit.amount,
+        "block_number": deposit.block_number,
+        "status": deposit.status,
+        "kyt_result": deposit.kyt_result,
+        "kyt_case_id": str(deposit.kyt_case_id) if deposit.kyt_case_id else None,
+        "detected_at": deposit.detected_at.isoformat() if deposit.detected_at else None,
+        "approved_by": deposit.approved_by,
+        "approved_at": deposit.approved_at.isoformat() if deposit.approved_at else None,
+        "rejected_by": deposit.rejected_by if hasattr(deposit, 'rejected_by') else None,
+        "rejected_at": deposit.rejected_at.isoformat() if hasattr(deposit, 'rejected_at') and deposit.rejected_at else None,
+        "rejection_reason": deposit.rejection_reason if hasattr(deposit, 'rejection_reason') else None,
+    }
+
+    # Build package data for hashing
+    package_data = {
+        "deposit_id": str(deposit_id),
+        "deposit": deposit_info,
+        "kyt_evaluation": kyt_eval,
+        "admin_decision": admin_decision,
+        "audit_events": [
+            {
+                "id": e.id,
+                "event_type": e.event_type.value,
+                "timestamp": e.timestamp.isoformat(),
+                "actor_id": e.actor_id,
+                "payload": e.payload,
+            }
+            for e in events
+        ],
+        "generated_at": datetime.utcnow().isoformat(),
+    }
+
+    # Compute package hash
+    package_hash = hashlib.sha256(
+        json.dumps(package_data, sort_keys=True, default=str).encode()
+    ).hexdigest()
+
+    return DepositAuditPackageResponse(
+        deposit_id=str(deposit_id),
+        deposit=deposit_info,
+        kyt_evaluation=kyt_eval,
+        admin_decision=admin_decision,
+        audit_events=[AuditEventResponse.model_validate(e) for e in events],
+        package_hash=package_hash,
+        generated_at=datetime.utcnow(),
+    )
 
 
 @router.post("/{deposit_id}/reject", response_model=DepositResponse)

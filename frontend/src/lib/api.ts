@@ -284,6 +284,10 @@ export const depositsApi = {
       body: JSON.stringify({ reason }),
     });
   },
+
+  getAuditPackage: async (id: string) => {
+    return apiFetch<import('@/types').DepositAuditPackage>(`/v1/deposits/${id}/audit`);
+  },
 };
 
 // Groups API
@@ -341,6 +345,26 @@ export const groupsApi = {
     return apiFetch<import('@/types').PolicySet>(`/v1/groups/policies/${policySetId}`);
   },
 
+  createPolicy: async (data: { name: string; description?: string }) => {
+    return apiFetch<import('@/types').PolicySet>('/v1/groups/policies', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  updatePolicy: async (policySetId: string, data: { name?: string; description?: string; is_active?: boolean }) => {
+    return apiFetch<import('@/types').PolicySet>(`/v1/groups/policies/${policySetId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  },
+
+  deletePolicy: async (policySetId: string) => {
+    return apiFetch<{ message: string }>(`/v1/groups/policies/${policySetId}`, {
+      method: 'DELETE',
+    });
+  },
+
   assignPolicy: async (groupId: string, policySetId: string) => {
     return apiFetch<import('@/types').Group>(`/v1/groups/${groupId}/policy`, {
       method: 'POST',
@@ -352,6 +376,44 @@ export const groupsApi = {
     return apiFetch<import('@/types').PolicyEvalPreview>(`/v1/groups/${groupId}/policy/preview`, {
       method: 'POST',
       body: JSON.stringify(data),
+    });
+  },
+
+  // Policy Rules
+  addRule: async (policySetId: string, data: {
+    rule_id: string;
+    priority: number;
+    conditions: Record<string, any>;
+    decision: 'ALLOW' | 'BLOCK' | 'CONTINUE';
+    kyt_required?: boolean;
+    approval_required?: boolean;
+    approval_count?: number;
+    description?: string;
+  }) => {
+    return apiFetch<import('@/types').PolicyRule>(`/v1/groups/policies/${policySetId}/rules`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  updateRule: async (policySetId: string, ruleId: string, data: {
+    priority?: number;
+    conditions?: Record<string, any>;
+    decision?: 'ALLOW' | 'BLOCK' | 'CONTINUE';
+    kyt_required?: boolean;
+    approval_required?: boolean;
+    approval_count?: number;
+    description?: string;
+  }) => {
+    return apiFetch<import('@/types').PolicyRule>(`/v1/groups/policies/${policySetId}/rules/${ruleId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  },
+
+  deleteRule: async (policySetId: string, ruleId: string) => {
+    return apiFetch<{ message: string }>(`/v1/groups/policies/${policySetId}/rules/${ruleId}`, {
+      method: 'DELETE',
     });
   },
 };

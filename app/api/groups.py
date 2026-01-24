@@ -24,10 +24,16 @@ from app.schemas.group import (
     AddressCheckResponse,
     PolicySetResponse,
     PolicySetListResponse,
+    PolicySetCreate,
+    PolicySetUpdate,
+    PolicyRuleCreate,
+    PolicyRuleUpdate,
+    PolicyRuleResponse,
     PolicyAssignRequest,
     PolicyEvalPreviewRequest,
     PolicyEvalPreviewResponse,
 )
+from app.models.policy_set import PolicyDecision
 
 router = APIRouter(prefix="/v1/groups", tags=["Groups"])
 
@@ -65,6 +71,334 @@ async def seed_demo_data(
                 "denylist_addresses": 6,
             }
         }
+    )
+
+
+# ============== Policy Set Endpoints (must be before /{group_id}) ==============
+
+@router.get("/policies", response_model=CorrelatedResponse[PolicySetListResponse])
+async def list_policy_sets(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+    correlation_id: str = Depends(get_correlation_id),
+):
+    """List all policy sets (admin only)."""
+    from sqlalchemy import select
+    from app.models.policy_set import PolicySet
+    from sqlalchemy.orm import selectinload
+
+    result = await db.execute(
+        select(PolicySet)
+        .options(selectinload(PolicySet.rules))
+        .order_by(PolicySet.name, PolicySet.version.desc())
+    )
+    policy_sets = list(result.scalars().all())
+
+    return CorrelatedResponse(
+        correlation_id=correlation_id,
+        data=PolicySetListResponse(
+            policy_sets=[PolicySetResponse(
+                id=ps.id,
+                name=ps.name,
+                version=ps.version,
+                description=ps.description,
+                is_active=ps.is_active,
+                snapshot_hash=ps.snapshot_hash,
+                rules=[],  # Don't include rules in list view
+                created_at=ps.created_at,
+            ) for ps in policy_sets],
+            total=len(policy_sets),
+        )
+    )
+
+
+@router.get("/policies/{policy_set_id}", response_model=CorrelatedResponse[PolicySetResponse])
+async def get_policy_set(
+    policy_set_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    correlation_id: str = Depends(get_correlation_id),
+):
+    """Get policy set details with rules."""
+    audit = AuditService(db)
+    policy_service = PolicySetService(db, audit)
+
+    ps = await policy_service.get_policy_set(policy_set_id)
+    if not ps:
+        raise HTTPException(status_code=404, detail="Policy set not found")
+
+    return CorrelatedResponse(
+        correlation_id=correlation_id,
+        data=PolicySetResponse(
+            id=ps.id,
+            name=ps.name,
+            version=ps.version,
+            description=ps.description,
+            is_active=ps.is_active,
+            snapshot_hash=ps.snapshot_hash,
+            rules=[PolicyRuleResponse(
+                id=r.id,
+                rule_id=r.rule_id,
+                priority=r.priority,
+                conditions=r.conditions,
+                decision=r.decision,
+                kyt_required=r.kyt_required,
+                approval_required=r.approval_required,
+                approval_count=r.approval_count,
+                description=r.description,
+            ) for r in sorted(ps.rules, key=lambda x: x.priority)],
+            created_at=ps.created_at,
+        )
+    )
+
+
+@router.post("/policies", response_model=CorrelatedResponse[PolicySetResponse])
+async def create_policy_set(
+    data: PolicySetCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+    correlation_id: str = Depends(get_correlation_id),
+):
+    """Create a new policy set (admin only)."""
+    audit = AuditService(db)
+    policy_service = PolicySetService(db, audit)
+
+    ps = await policy_service.create_policy_set(
+        name=data.name,
+        description=data.description,
+        created_by=current_user.id,
+        correlation_id=correlation_id,
+    )
+    await db.commit()
+
+    return CorrelatedResponse(
+        correlation_id=correlation_id,
+        data=PolicySetResponse(
+            id=ps.id,
+            name=ps.name,
+            version=ps.version,
+            description=ps.description,
+            is_active=ps.is_active,
+            snapshot_hash=ps.snapshot_hash,
+            rules=[],
+            created_at=ps.created_at,
+        )
+    )
+
+
+@router.put("/policies/{policy_set_id}", response_model=CorrelatedResponse[PolicySetResponse])
+async def update_policy_set(
+    policy_set_id: str,
+    data: PolicySetUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+    correlation_id: str = Depends(get_correlation_id),
+):
+    """Update a policy set (admin only)."""
+    audit = AuditService(db)
+    policy_service = PolicySetService(db, audit)
+
+    ps = await policy_service.update_policy_set(
+        policy_set_id=policy_set_id,
+        name=data.name,
+        description=data.description,
+        is_active=data.is_active,
+        actor_id=current_user.id,
+        correlation_id=correlation_id,
+    )
+    if not ps:
+        raise HTTPException(status_code=404, detail="Policy set not found")
+
+    await db.commit()
+
+    # Reload to get updated rules
+    ps = await policy_service.get_policy_set(policy_set_id)
+
+    return CorrelatedResponse(
+        correlation_id=correlation_id,
+        data=PolicySetResponse(
+            id=ps.id,
+            name=ps.name,
+            version=ps.version,
+            description=ps.description,
+            is_active=ps.is_active,
+            snapshot_hash=ps.snapshot_hash,
+            rules=[PolicyRuleResponse(
+                id=r.id,
+                rule_id=r.rule_id,
+                priority=r.priority,
+                conditions=r.conditions,
+                decision=r.decision,
+                kyt_required=r.kyt_required,
+                approval_required=r.approval_required,
+                approval_count=r.approval_count,
+                description=r.description,
+            ) for r in sorted(ps.rules, key=lambda x: x.priority)],
+            created_at=ps.created_at,
+        )
+    )
+
+
+@router.delete("/policies/{policy_set_id}")
+async def delete_policy_set(
+    policy_set_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+    correlation_id: str = Depends(get_correlation_id),
+):
+    """Delete a policy set (admin only). Cannot delete if assigned to a group."""
+    audit = AuditService(db)
+    policy_service = PolicySetService(db, audit)
+
+    deleted = await policy_service.delete_policy_set(
+        policy_set_id=policy_set_id,
+        actor_id=current_user.id,
+        correlation_id=correlation_id,
+    )
+    if not deleted:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot delete policy set (may be assigned to a group or not found)"
+        )
+
+    await db.commit()
+
+    return CorrelatedResponse(
+        correlation_id=correlation_id,
+        data={"message": "Policy set deleted"}
+    )
+
+
+# ============== Policy Rule Endpoints ==============
+
+@router.post("/policies/{policy_set_id}/rules", response_model=CorrelatedResponse[PolicyRuleResponse])
+async def add_rule(
+    policy_set_id: str,
+    data: PolicyRuleCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+    correlation_id: str = Depends(get_correlation_id),
+):
+    """Add a rule to a policy set (admin only)."""
+    audit = AuditService(db)
+    policy_service = PolicySetService(db, audit)
+
+    # Check policy exists
+    ps = await policy_service.get_policy_set(policy_set_id)
+    if not ps:
+        raise HTTPException(status_code=404, detail="Policy set not found")
+
+    # Check if rule_id already exists
+    existing_rule_ids = [r.rule_id for r in ps.rules]
+    if data.rule_id in existing_rule_ids:
+        raise HTTPException(status_code=400, detail=f"Rule {data.rule_id} already exists")
+
+    rule = await policy_service.add_rule(
+        policy_set_id=policy_set_id,
+        rule_id=data.rule_id,
+        conditions=data.conditions,
+        decision=PolicyDecision(data.decision),
+        priority=data.priority,
+        kyt_required=data.kyt_required,
+        approval_required=data.approval_required,
+        approval_count=data.approval_count,
+        description=data.description,
+        actor_id=current_user.id,
+        correlation_id=correlation_id,
+    )
+    await db.commit()
+
+    return CorrelatedResponse(
+        correlation_id=correlation_id,
+        data=PolicyRuleResponse(
+            id=rule.id,
+            rule_id=rule.rule_id,
+            priority=rule.priority,
+            conditions=rule.conditions,
+            decision=rule.decision,
+            kyt_required=rule.kyt_required,
+            approval_required=rule.approval_required,
+            approval_count=rule.approval_count,
+            description=rule.description,
+        )
+    )
+
+
+@router.put("/policies/{policy_set_id}/rules/{rule_id}", response_model=CorrelatedResponse[PolicyRuleResponse])
+async def update_rule(
+    policy_set_id: str,
+    rule_id: str,
+    data: PolicyRuleUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+    correlation_id: str = Depends(get_correlation_id),
+):
+    """Update a policy rule (admin only)."""
+    audit = AuditService(db)
+    policy_service = PolicySetService(db, audit)
+
+    decision = PolicyDecision(data.decision) if data.decision else None
+
+    rule = await policy_service.update_rule(
+        policy_set_id=policy_set_id,
+        rule_id=rule_id,
+        priority=data.priority,
+        conditions=data.conditions,
+        decision=decision,
+        kyt_required=data.kyt_required,
+        approval_required=data.approval_required,
+        approval_count=data.approval_count,
+        description=data.description,
+        actor_id=current_user.id,
+        correlation_id=correlation_id,
+    )
+    if not rule:
+        raise HTTPException(status_code=404, detail="Rule not found")
+
+    await db.commit()
+
+    return CorrelatedResponse(
+        correlation_id=correlation_id,
+        data=PolicyRuleResponse(
+            id=rule.id,
+            rule_id=rule.rule_id,
+            priority=rule.priority,
+            conditions=rule.conditions,
+            decision=rule.decision,
+            kyt_required=rule.kyt_required,
+            approval_required=rule.approval_required,
+            approval_count=rule.approval_count,
+            description=rule.description,
+        )
+    )
+
+
+@router.delete("/policies/{policy_set_id}/rules/{rule_id}")
+async def delete_rule(
+    policy_set_id: str,
+    rule_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+    correlation_id: str = Depends(get_correlation_id),
+):
+    """Delete a rule from a policy set (admin only)."""
+    audit = AuditService(db)
+    policy_service = PolicySetService(db, audit)
+
+    deleted = await policy_service.delete_rule(
+        policy_set_id=policy_set_id,
+        rule_id=rule_id,
+        actor_id=current_user.id,
+        correlation_id=correlation_id,
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Rule not found")
+
+    await db.commit()
+
+    return CorrelatedResponse(
+        correlation_id=correlation_id,
+        data={"message": "Rule deleted", "rule_id": rule_id}
     )
 
 
@@ -368,85 +702,7 @@ async def check_address(
     )
 
 
-# ============== Policy Endpoints ==============
-
-@router.get("/policies", response_model=CorrelatedResponse[PolicySetListResponse])
-async def list_policy_sets(
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin),
-    correlation_id: str = Depends(get_correlation_id),
-):
-    """List all policy sets (admin only)."""
-    from sqlalchemy import select
-    from app.models.policy_set import PolicySet
-    from sqlalchemy.orm import selectinload
-
-    result = await db.execute(
-        select(PolicySet)
-        .options(selectinload(PolicySet.rules))
-        .order_by(PolicySet.name, PolicySet.version.desc())
-    )
-    policy_sets = list(result.scalars().all())
-
-    return CorrelatedResponse(
-        correlation_id=correlation_id,
-        data=PolicySetListResponse(
-            policy_sets=[PolicySetResponse(
-                id=ps.id,
-                name=ps.name,
-                version=ps.version,
-                description=ps.description,
-                is_active=ps.is_active,
-                snapshot_hash=ps.snapshot_hash,
-                rules=[],  # Don't include rules in list view
-                created_at=ps.created_at,
-            ) for ps in policy_sets],
-            total=len(policy_sets),
-        )
-    )
-
-
-@router.get("/policies/{policy_set_id}", response_model=CorrelatedResponse[PolicySetResponse])
-async def get_policy_set(
-    policy_set_id: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-    correlation_id: str = Depends(get_correlation_id),
-):
-    """Get policy set details with rules."""
-    audit = AuditService(db)
-    policy_service = PolicySetService(db, audit)
-
-    ps = await policy_service.get_policy_set(policy_set_id)
-    if not ps:
-        raise HTTPException(status_code=404, detail="Policy set not found")
-
-    from app.schemas.group import PolicyRuleResponse
-
-    return CorrelatedResponse(
-        correlation_id=correlation_id,
-        data=PolicySetResponse(
-            id=ps.id,
-            name=ps.name,
-            version=ps.version,
-            description=ps.description,
-            is_active=ps.is_active,
-            snapshot_hash=ps.snapshot_hash,
-            rules=[PolicyRuleResponse(
-                id=r.id,
-                rule_id=r.rule_id,
-                priority=r.priority,
-                conditions=r.conditions,
-                decision=r.decision,
-                kyt_required=r.kyt_required,
-                approval_required=r.approval_required,
-                approval_count=r.approval_count,
-                description=r.description,
-            ) for r in sorted(ps.rules, key=lambda x: x.priority)],
-            created_at=ps.created_at,
-        )
-    )
-
+# ============== Group Policy Assignment Endpoints ==============
 
 @router.post("/{group_id}/policy", response_model=CorrelatedResponse[GroupResponse])
 async def assign_policy(

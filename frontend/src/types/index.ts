@@ -79,6 +79,40 @@ export interface Deposit {
 export type DepositStatus = 'PENDING_CONFIRMATION' | 'PENDING_KYT' | 'PENDING_ADMIN' | 'APPROVED' | 'REJECTED' | 'CREDITED';
 export type KYTResult = 'ALLOW' | 'REVIEW' | 'BLOCK';
 
+export interface DepositAuditPackage {
+  deposit_id: string;
+  deposit: {
+    id: string;
+    wallet_id: string;
+    wallet_address: string | null;
+    tx_hash: string;
+    from_address: string;
+    asset: string;
+    amount: string;
+    block_number: number | null;
+    status: string;
+    kyt_result: string | null;
+    kyt_case_id: string | null;
+    detected_at: string | null;
+    approved_by: string | null;
+    approved_at: string | null;
+    rejected_by: string | null;
+    rejected_at: string | null;
+    rejection_reason: string | null;
+  };
+  kyt_evaluation: Record<string, any> | null;
+  admin_decision: {
+    decision: 'APPROVED' | 'REJECTED';
+    decided_by: string;
+    decided_at: string;
+    reason?: string | null;
+    payload?: Record<string, any>;
+  } | null;
+  audit_events: AuditEvent[];
+  package_hash: string;
+  generated_at: string;
+}
+
 // Withdraw / Transaction types
 export interface WithdrawRequest {
   id: string;
@@ -92,6 +126,7 @@ export interface WithdrawRequest {
   nonce: number | null;
   gas_limit: number | null;
   gas_price: number | null;
+  block_number: number | null;
   confirmations: number;
   required_approvals: number;
   requires_approval: boolean;
@@ -189,8 +224,23 @@ export interface AuditEvent {
 
 export interface AuditPackage {
   tx_request_id: string;
+  tx_request: Record<string, any>;
+  policy_evaluation: Record<string, any> | null;
+  kyt_evaluation: Record<string, any> | null;
+  approvals: Array<{
+    id: string;
+    user_id: string;
+    decision: string;
+    comment: string | null;
+    created_at: string;
+  }>;
+  signing: Record<string, any> | null;
+  broadcast: Record<string, any> | null;
+  confirmations: Record<string, any> | null;
   audit_events: AuditEvent[];
-  verification: {
+  package_hash: string;
+  generated_at: string;
+  verification?: {
     is_valid: boolean;
     chain_length: number;
     first_event: string;

@@ -90,6 +90,42 @@ class AddressCheckResponse(BaseModel):
 
 # ============== Policy Set Schemas ==============
 
+class PolicySetCreate(BaseModel):
+    """Create a new policy set."""
+    name: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = None
+
+
+class PolicySetUpdate(BaseModel):
+    """Update policy set details."""
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class PolicyRuleCreate(BaseModel):
+    """Create a new policy rule."""
+    rule_id: str = Field(..., min_length=1, max_length=50, pattern=r"^[A-Z0-9-]+$")
+    priority: int = Field(100, ge=1, le=1000)
+    conditions: dict = Field(default_factory=dict)
+    decision: PolicyDecision
+    kyt_required: bool = True
+    approval_required: bool = False
+    approval_count: int = Field(0, ge=0, le=10)
+    description: Optional[str] = None
+
+
+class PolicyRuleUpdate(BaseModel):
+    """Update policy rule."""
+    priority: Optional[int] = Field(None, ge=1, le=1000)
+    conditions: Optional[dict] = None
+    decision: Optional[PolicyDecision] = None
+    kyt_required: Optional[bool] = None
+    approval_required: Optional[bool] = None
+    approval_count: Optional[int] = Field(None, ge=0, le=10)
+    description: Optional[str] = None
+
+
 class PolicyRuleResponse(BaseModel):
     """Policy rule details."""
     id: str

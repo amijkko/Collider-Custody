@@ -185,8 +185,8 @@ class ChainListener:
             
             # Initialize last processed block
             if self._last_processed_block is None:
-                # Start from a few blocks back
-                self._last_processed_block = max(0, current_block - 10)
+                # Start from more blocks back to catch recent deposits
+                self._last_processed_block = max(0, current_block - 100)
             
             # Don't scan too far ahead
             if current_block <= self._last_processed_block:
