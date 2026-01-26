@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     mpc_signer_enabled: bool = False  # Set to True when using real MPC
     mpc_permit_secret: str = "dev_permit_secret_minimum_32_characters_long"
 
+    # Auto-seed demo data on startup
+    auto_seed: bool = False  # Set to True to seed Retail group and policies on startup
+
     # BitOK KYT Integration
     bitok_enabled: bool = False  # Set to True to enable BitOK KYT
     bitok_mock_mode: bool = False  # Mock mode for testing without real API

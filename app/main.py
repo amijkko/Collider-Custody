@@ -50,7 +50,18 @@ async def lifespan(app: FastAPI):
     global chain_listener, chain_listener_task
     
     logger.info("Starting Collider Custody Service...")
-    
+
+    # Auto-seed demo data if enabled
+    if settings.auto_seed:
+        logger.info("Auto-seeding demo data...")
+        try:
+            from app.services.seed import seed_all
+            async with async_session_maker() as db:
+                await seed_all(db)
+            logger.info("Auto-seed completed successfully")
+        except Exception as e:
+            logger.warning(f"Auto-seed failed (may already exist): {e}")
+
     # Start chain listener in background
     # Chain listener monitors blockchain for confirmations and inbound deposits
     chain_listener = ChainListener(
