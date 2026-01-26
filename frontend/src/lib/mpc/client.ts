@@ -352,7 +352,16 @@ export class MPCClient {
   }
 
   private handleMessage(message: WebSocketMessage): void {
-    console.log('[MPC] Received:', message.type, message.session_id);
+    // Log with full details for errors, minimal for others
+    if (message.type.includes('error') || message.type === 'error') {
+      console.error('[MPC] Error received:', message.type, {
+        session_id: message.session_id,
+        error: message.data?.error,
+        details: message.data,
+      });
+    } else {
+      console.log('[MPC] Received:', message.type, message.session_id || '');
+    }
 
     switch (message.type) {
       case 'auth_ok':
@@ -395,9 +404,9 @@ export class MPCClient {
   }
 
   private handleAuthError(message: WebSocketMessage): void {
-    const error = new Error(
-      (message.data?.error as string) || 'Authentication failed'
-    );
+    const errorMsg = (message.data?.error as string) || 'Authentication failed';
+    console.error('[MPC] Auth error:', errorMsg, message.data);
+    const error = new Error(errorMsg);
     this.setStatus('error');
     this.authPromise?.reject(error);
     this.authPromise = null;
@@ -579,7 +588,9 @@ export class MPCClient {
   }
 
   private handleDKGError(message: WebSocketMessage): void {
-    const error = new Error((message.data?.error as string) || 'DKG failed');
+    const errorMsg = (message.data?.error as string) || 'DKG failed';
+    console.error('[MPC] DKG error:', errorMsg, message.data);
+    const error = new Error(errorMsg);
     this.setStatus('authenticated');
     this.dkgPromise?.reject(error);
     this.dkgPromise = null;
@@ -672,7 +683,9 @@ export class MPCClient {
   }
 
   private handleSignError(message: WebSocketMessage): void {
-    const error = new Error((message.data?.error as string) || 'Signing failed');
+    const errorMsg = (message.data?.error as string) || 'Signing failed';
+    console.error('[MPC] Signing error:', errorMsg, message.data);
+    const error = new Error(errorMsg);
     this.setStatus('authenticated');
     this.signingPromise?.reject(error);
     this.signingPromise = null;
@@ -680,7 +693,9 @@ export class MPCClient {
   }
 
   private handleError(message: WebSocketMessage): void {
-    const error = new Error((message.data?.error as string) || 'Unknown error');
+    const errorMsg = (message.data?.error as string) || 'Unknown error';
+    console.error('[MPC] General error:', errorMsg, message.data);
+    const error = new Error(errorMsg);
     this.config.onError?.(error);
   }
 

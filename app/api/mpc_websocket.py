@@ -551,7 +551,12 @@ async def handle_sign_start(
             await websocket.send_json({
                 "type": MessageType.SIGN_ERROR,
                 "session_id": session.session_id,
-                "data": {"error": error}
+                "data": {
+                    "error": error or "Bank signer failed to start signing",
+                    "stage": "sign_start",
+                    "keyset_id": keyset_id,
+                    "tx_request_id": tx_request_id,
+                }
             })
             manager.cleanup_session(session.session_id)
             return
@@ -570,7 +575,12 @@ async def handle_sign_start(
         await websocket.send_json({
             "type": MessageType.SIGN_ERROR,
             "session_id": session.session_id,
-            "data": {"error": str(e)}
+            "data": {
+                "error": f"Signing initialization failed: {str(e)}",
+                "stage": "sign_start_exception",
+                "keyset_id": keyset_id,
+                "tx_request_id": tx_request_id,
+            }
         })
         manager.cleanup_session(session.session_id)
 
@@ -652,6 +662,10 @@ async def handle_sign_round(
         await websocket.send_json({
             "type": MessageType.SIGN_ERROR,
             "session_id": session_id,
-            "data": {"error": str(e)}
+            "data": {
+                "error": f"Signing round {round_num} failed: {str(e)}",
+                "stage": f"sign_round_{round_num}",
+                "round": round_num,
+            }
         })
         manager.cleanup_session(session_id)
