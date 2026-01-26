@@ -516,7 +516,9 @@ async def handle_sign_start(
         })
         return
     
-    message_hash_bytes = bytes.fromhex(message_hash)
+    # Remove 0x prefix if present
+    message_hash_clean = message_hash[2:] if message_hash.startswith("0x") else message_hash
+    message_hash_bytes = bytes.fromhex(message_hash_clean)
     
     # Create session
     session = manager.create_session(
