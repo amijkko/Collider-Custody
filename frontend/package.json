@@ -32,9 +32,10 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.57.0",
-    "@types/js-sha3": "^0.8.2",
     "@types/node": "^20",
     "@types/react": "^18",
+    "dotenv": "^17.2.3",
+    "ethers": "^6.16.0",
     "typescript": "^5"
   }
 }
