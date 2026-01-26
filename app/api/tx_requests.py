@@ -222,3 +222,87 @@ async def sign_tx_request(
             detail=f"Signing failed: {str(e)}"
         )
 
+
+from pydantic import BaseModel
+from web3 import Web3
+
+
+class SigningDataResponse(BaseModel):
+    """Data needed for MPC signing."""
+    tx_request_id: str
+    wallet_id: str
+    keyset_id: str | None
+    message_hash: str
+    to_address: str
+    amount: str
+    status: str
+
+
+@router.get("/{tx_request_id}/signing-data", response_model=CorrelatedResponse[SigningDataResponse])
+async def get_signing_data(
+    tx_request_id: str,
+    db: AsyncSession = Depends(get_db),
+    orchestrator: TxOrchestrator = Depends(get_orchestrator),
+    current_user: User = Depends(get_current_user),
+    correlation_id: str = Depends(get_correlation_id)
+):
+    """
+    Get signing data for a transaction.
+
+    Returns the message hash that needs to be signed via MPC.
+    Only available for transactions in SIGN_PENDING status.
+    """
+    from app.models.tx_request import TxRequest
+    from app.models.wallet import Wallet
+    from sqlalchemy import select
+
+    # Get transaction
+    result = await db.execute(
+        select(TxRequest).where(TxRequest.id == tx_request_id)
+    )
+    tx = result.scalar_one_or_none()
+    if not tx:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Transaction {tx_request_id} not found"
+        )
+
+    if tx.status != TxStatus.SIGN_PENDING:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Transaction is not pending signature (status: {tx.status})"
+        )
+
+    # Get wallet
+    wallet_result = await db.execute(
+        select(Wallet).where(Wallet.id == tx.wallet_id)
+    )
+    wallet = wallet_result.scalar_one()
+
+    # Compute message hash (hash of serialized transaction)
+    # For MPC signing, we need a deterministic hash
+    value_wei = int(tx.amount) if tx.asset == "ETH" else 0
+    tx_dict = {
+        "nonce": tx.nonce or 0,
+        "to": Web3.to_checksum_address(tx.to_address),
+        "value": value_wei,
+        "gas": tx.gas_limit or 21000,
+        "chainId": 11155111,  # Sepolia
+    }
+
+    # Simple deterministic hash for signing
+    message_hash = Web3.keccak(text=str(tx_dict)).hex()
+
+    return CorrelatedResponse(
+        correlation_id=correlation_id,
+        data=SigningDataResponse(
+            tx_request_id=tx.id,
+            wallet_id=str(tx.wallet_id),
+            keyset_id=str(wallet.mpc_keyset_id) if wallet.mpc_keyset_id else None,
+            message_hash=message_hash,
+            to_address=tx.to_address,
+            amount=str(tx.amount),
+            status=tx.status.value if hasattr(tx.status, 'value') else str(tx.status),
+        )
+    )
+

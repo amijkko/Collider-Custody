@@ -72,8 +72,27 @@ export function SignTransactionModal({
     setError(null);
 
     try {
+      // Get token from localStorage
+      const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
+      if (!token) {
+        throw new Error('Not authenticated');
+      }
+
+      // Determine WebSocket URL based on API URL
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || '';
+      let wsUrl: string;
+      if (apiUrl.includes('railway.app')) {
+        // Production: use wss:// with the same host
+        wsUrl = apiUrl.replace('https://', 'wss://').replace('http://', 'ws://') + '/v1/mpc/ws';
+      } else {
+        wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/v1/mpc/ws';
+      }
+
+      console.log('[MPC] Connecting to WebSocket:', wsUrl);
+
       const client = createMPCClient({
-        wsUrl: process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000',
+        wsUrl,
+        token, // Pass token to client config
         onProgress: (message: string, round: number, total: number) => {
           setProgress(message);
           setProgressRound(round);
@@ -86,10 +105,7 @@ export function SignTransactionModal({
       });
 
       await client.connect();
-      const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
-      if (token) {
-        await client.authenticate();
-      }
+      await client.authenticate();
       const result = await client.startSigning(
         transaction.mpcKeysetId || '',
         transaction.id,

@@ -208,6 +208,18 @@ export const txRequestsApi = {
       method: 'POST',
     });
   },
+
+  getSigningData: async (id: string) => {
+    return apiFetch<{
+      tx_request_id: string;
+      wallet_id: string;
+      keyset_id: string | null;
+      message_hash: string;
+      to_address: string;
+      amount: string;
+      status: string;
+    }>(`/v1/tx-requests/${id}/signing-data`);
+  },
 };
 
 // Audit API
