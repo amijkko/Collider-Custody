@@ -53,10 +53,17 @@ func main() {
 	var store storage.Storage
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL != "" {
-		logger.Info("Using PostgreSQL storage")
+		// Mask password in log
+		maskedURL := databaseURL
+		if idx := len(maskedURL); idx > 30 {
+			maskedURL = maskedURL[:30] + "..."
+		}
+		logger.Info("Using PostgreSQL storage", zap.String("url_prefix", maskedURL))
 		pgStore, err := storage.NewPostgresStorage(databaseURL, storagePassword)
 		if err != nil {
-			logger.Fatal("Failed to initialize PostgreSQL storage", zap.Error(err))
+			logger.Fatal("Failed to initialize PostgreSQL storage",
+				zap.Error(err),
+				zap.String("hint", "Check DATABASE_URL format and network connectivity"))
 		}
 		store = pgStore
 	} else {

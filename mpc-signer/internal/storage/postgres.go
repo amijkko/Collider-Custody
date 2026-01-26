@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,6 +28,15 @@ type PostgresStorage struct {
 
 // NewPostgresStorage creates a new PostgreSQL-based storage
 func NewPostgresStorage(databaseURL string, password string) (*PostgresStorage, error) {
+	// Add sslmode=disable for Railway internal connections if not specified
+	if !strings.Contains(databaseURL, "sslmode=") {
+		if strings.Contains(databaseURL, "?") {
+			databaseURL += "&sslmode=disable"
+		} else {
+			databaseURL += "?sslmode=disable"
+		}
+	}
+
 	db, err := sql.Open("postgres", databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
