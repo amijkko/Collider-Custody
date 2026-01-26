@@ -289,7 +289,8 @@ export class MPCClient {
       saveData = await decryptShare(share, password);
       this.currentPassword = password;
       this.currentSigningSaveData = bytesToHex(saveData);
-      this.currentMessageHash = messageHash;
+      // Remove 0x prefix for WASM (expects raw hex)
+      this.currentMessageHash = messageHash.startsWith('0x') ? messageHash.slice(2) : messageHash;
     } catch {
       throw new Error('Invalid password');
     }
