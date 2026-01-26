@@ -603,10 +603,13 @@ async def handle_sign_round(
         return
     
     round_num = data.get("round", session.current_round + 1)
-    user_message = data.get("user_message")
-    
-    if user_message:
-        user_message = bytes.fromhex(user_message)
+    user_message_raw = data.get("user_message")
+
+    logger.info(f"Sign round {round_num}: data keys={list(data.keys())}, user_message_raw type={type(user_message_raw).__name__}, len={len(user_message_raw) if user_message_raw else 0}")
+
+    user_message = None
+    if user_message_raw:
+        user_message = bytes.fromhex(user_message_raw)
     
     try:
         # Process round on bank signer
