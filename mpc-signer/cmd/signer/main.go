@@ -49,10 +49,23 @@ func main() {
 		logger.Warn("Using default storage password - set MPC_STORAGE_PASSWORD in production!")
 	}
 
-	// Initialize storage
-	store, err := storage.NewFileStorage(*storageDir, storagePassword)
-	if err != nil {
-		logger.Fatal("Failed to initialize storage", zap.Error(err))
+	// Initialize storage (prefer PostgreSQL if DATABASE_URL is set)
+	var store storage.Storage
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL != "" {
+		logger.Info("Using PostgreSQL storage")
+		pgStore, err := storage.NewPostgresStorage(databaseURL, storagePassword)
+		if err != nil {
+			logger.Fatal("Failed to initialize PostgreSQL storage", zap.Error(err))
+		}
+		store = pgStore
+	} else {
+		logger.Info("Using file storage", zap.String("path", *storageDir))
+		fileStore, err := storage.NewFileStorage(*storageDir, storagePassword)
+		if err != nil {
+			logger.Fatal("Failed to initialize file storage", zap.Error(err))
+		}
+		store = fileStore
 	}
 
 	// List existing shares

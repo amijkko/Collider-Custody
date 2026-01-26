@@ -2,12 +2,14 @@
 # Get logs from Railway and Vercel deployments
 # Usage: ./scripts/get_logs.sh [railway|vercel] [lines]
 
-RAILWAY_TOKEN="4db8e47f-11e3-45a5-9314-90d55f05c504"
+RAILWAY_TOKEN="2dfd15da-f059-4f24-8696-4ee1d94989db"
 VERCEL_TOKEN="k4DXJemVS2G9G3zIOgZ4iQcg"
 
 # Railway service IDs
 RAILWAY_PROJECT_ID="af7672fd-2a05-49cb-862a-ea4ee201aebe"
-RAILWAY_SERVICE_ID="e54d8649-b1c2-400e-9c6c-0e49da7fa381"
+RAILWAY_CORE_API_SERVICE_ID="e54d8649-b1c2-400e-9c6c-0e49da7fa381"  # discerning-rebirth
+RAILWAY_MPC_SIGNER_SERVICE_ID="713033e6-242d-4e44-88d0-89572a216dd7"  # mpc-signer
+RAILWAY_SERVICE_ID="${RAILWAY_CORE_API_SERVICE_ID}"  # default to core API
 
 LINES=${2:-50}
 

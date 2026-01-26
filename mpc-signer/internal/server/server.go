@@ -185,13 +185,22 @@ func (s *MPCServer) DKGRound(ctx context.Context, req *mpc.DKGRoundRequest) (*mp
 			EthereumAddress: result.EthereumAddress,
 		}
 
+		// Get session to retrieve threshold and total parties
+		dkgSession, exists := s.dkgHandler.GetSession(req.SessionId)
+		threshold := 1    // Default for 2-of-2
+		totalParties := 2 // Default
+		if exists && dkgSession != nil {
+			threshold = dkgSession.Threshold
+			totalParties = dkgSession.TotalParties
+		}
+
 		// Save the share
 		shareData := &storage.ShareData{
 			KeysetID:        result.KeysetID,
 			WalletID:        "", // Will be set by coordinator
 			PartyIndex:      0,  // This is the bank node
-			Threshold:       2,  // TODO: Get from session
-			TotalParties:    2,
+			Threshold:       threshold,
+			TotalParties:    totalParties,
 			PublicKey:       result.PublicKey,
 			EthereumAddress: result.EthereumAddress,
 			ShareBytes:      result.SaveData,
