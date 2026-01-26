@@ -612,12 +612,16 @@ async def handle_sign_round(
         # Process round on bank signer
         # User is party 1
         incoming_messages = [(1, user_message)] if user_message else []
+        logger.info(f"Signing round {round_num}: incoming_msg_size={len(user_message) if user_message else 0}")
+
         success, out_msg, result, is_final, error = await mpc_client.process_signing_round(
             session_id=session_id,
             round_num=round_num,
             incoming_messages=incoming_messages,
         )
-        
+
+        logger.info(f"Signing round {round_num}: success={success}, out_msg_size={len(out_msg) if out_msg else 0}, is_final={is_final}")
+
         if not success:
             await websocket.send_json({
                 "type": MessageType.SIGN_ERROR,
