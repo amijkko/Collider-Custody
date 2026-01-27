@@ -344,17 +344,18 @@ async def _finalize_signing(
         value_wei = int(tx.amount) if tx.asset == "ETH" else 0
         gas_prices = await ethereum_service.get_gas_price()
 
+        # Convert all numeric fields to int (they may be Decimal from DB)
         tx_dict = {
-            "nonce": tx.nonce or 0,
+            "nonce": int(tx.nonce or 0),
             "to": Web3.to_checksum_address(tx.to_address),
-            "value": value_wei,
-            "gas": tx.gas_limit or 21000,
-            "chainId": ethereum_service.chain_id,
+            "value": int(value_wei),
+            "gas": int(tx.gas_limit or 21000),
+            "chainId": int(ethereum_service.chain_id),
         }
 
         # Use legacy transactions for now (simpler to encode with manual signature)
         # TODO: Add EIP-1559 support
-        tx_dict["gasPrice"] = tx.gas_price or gas_prices.get("legacy_gas_price", 0)
+        tx_dict["gasPrice"] = int(tx.gas_price or gas_prices.get("legacy_gas_price", 0))
 
         # Add data for contract calls
         if tx.data:
