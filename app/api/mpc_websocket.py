@@ -33,9 +33,9 @@ from app.models.tx_request import TxRequest, TxStatus
 from app.models.wallet import Wallet
 from sqlalchemy import select
 from eth_account import Account
-from eth_account._utils.legacy_transactions import serializable_unsigned_transaction_from_dict
-from eth_account._utils.typed_transactions import TypedTransaction
 from web3 import Web3
+import rlp
+from eth_utils import to_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -367,9 +367,20 @@ async def _finalize_signing(
         s = int.from_bytes(result.signature_s, byteorder='big')
         v = result.signature_v
 
-        # Legacy transaction - use standard eth_account encoding
-        unsigned_tx = serializable_unsigned_transaction_from_dict(tx_dict)
-        signed_tx_bytes = unsigned_tx.encode((v, r, s))
+        # Use RLP encoding for legacy transaction
+        # Legacy tx structure: [nonce, gasPrice, gas, to, value, data, v, r, s]
+
+        # Prepare transaction fields
+        nonce = tx_dict["nonce"]
+        gas_price = tx_dict["gasPrice"]
+        gas = tx_dict["gas"]
+        to = to_bytes(hexstr=tx_dict["to"])
+        value = tx_dict["value"]
+        data = to_bytes(hexstr=tx_dict.get("data", "0x"))
+
+        # Encode with RLP
+        tx_list = [nonce, gas_price, gas, to, value, data, v, r, s]
+        signed_tx_bytes = rlp.encode(tx_list)
 
         signed_tx_hex = "0x" + signed_tx_bytes.hex()
         tx_hash = "0x" + Web3.keccak(signed_tx_bytes).hex()
