@@ -28,6 +28,14 @@ from app.models.user import User
 from app.database import async_session_maker
 from app.services.wallet import WalletService
 from app.services.audit import AuditService
+from app.services.ethereum import EthereumService
+from app.models.tx_request import TxRequest, TxStatus
+from app.models.wallet import Wallet
+from sqlalchemy import select
+from eth_account import Account
+from eth_account._utils.legacy_transactions import serializable_unsigned_transaction_from_dict
+from eth_account._utils.typed_transactions import TypedTransaction
+from web3 import Web3
 
 logger = logging.getLogger(__name__)
 
@@ -75,12 +83,14 @@ class MPCSession:
         user_id: str,
         wallet_id: Optional[str] = None,
         keyset_id: Optional[str] = None,
+        tx_request_id: Optional[str] = None,
     ):
         self.session_id = session_id
         self.session_type = session_type
         self.user_id = user_id
         self.wallet_id = wallet_id
         self.keyset_id = keyset_id
+        self.tx_request_id = tx_request_id
         self.current_round = 0
         self.created_at = datetime.utcnow()
         self.expires_at = datetime.utcnow() + timedelta(minutes=5)
@@ -129,6 +139,7 @@ class ConnectionManager:
         user_id: str,
         wallet_id: Optional[str] = None,
         keyset_id: Optional[str] = None,
+        tx_request_id: Optional[str] = None,
     ) -> MPCSession:
         session_id = str(uuid4())
         session = MPCSession(
@@ -137,6 +148,7 @@ class ConnectionManager:
             user_id=user_id,
             wallet_id=wallet_id,
             keyset_id=keyset_id,
+            tx_request_id=tx_request_id,
         )
         self.sessions[session_id] = session
         return session
@@ -286,6 +298,131 @@ async def mpc_websocket_endpoint(websocket: WebSocket):
     finally:
         if user_id:
             await manager.disconnect(user_id)
+
+
+async def _finalize_signing(
+    session: MPCSession,
+    result: SigningResult,
+    user_id: str,
+):
+    """
+    Finalize MPC signing: save signature to DB, update status, and broadcast transaction.
+
+    This function:
+    1. Retrieves the transaction from DB
+    2. Assembles the signed transaction from R, S, V components
+    3. Saves signed_tx and tx_hash to DB
+    4. Updates transaction status to SIGNED -> BROADCAST_PENDING -> BROADCASTED
+    5. Broadcasts the transaction to Ethereum network
+    """
+    if not session.tx_request_id:
+        raise ValueError("tx_request_id not found in session")
+
+    # Get DB session
+    async with async_session_maker() as db:
+        # Get transaction
+        tx_result = await db.execute(
+            select(TxRequest).where(TxRequest.id == session.tx_request_id)
+        )
+        tx = tx_result.scalar_one_or_none()
+        if not tx:
+            raise ValueError(f"Transaction {session.tx_request_id} not found")
+
+        # Get wallet
+        wallet_result = await db.execute(
+            select(Wallet).where(Wallet.id == tx.wallet_id)
+        )
+        wallet = wallet_result.scalar_one_or_none()
+        if not wallet:
+            raise ValueError(f"Wallet {tx.wallet_id} not found")
+
+        # Create ethereum service
+        audit_service = AuditService(db)
+        ethereum_service = EthereumService(db, audit_service)
+
+        # Build transaction dict to assemble signed transaction
+        value_wei = int(tx.amount) if tx.asset == "ETH" else 0
+        gas_prices = await ethereum_service.get_gas_price()
+
+        tx_dict = {
+            "nonce": tx.nonce or 0,
+            "to": Web3.to_checksum_address(tx.to_address),
+            "value": value_wei,
+            "gas": tx.gas_limit or 21000,
+            "chainId": ethereum_service.chain_id,
+        }
+
+        # Add gas price (legacy or EIP-1559)
+        if gas_prices.get("max_fee") and gas_prices.get("max_priority_fee"):
+            tx_dict["maxFeePerGas"] = gas_prices["max_fee"]
+            tx_dict["maxPriorityFeePerGas"] = gas_prices["max_priority_fee"]
+            tx_dict["type"] = 2  # EIP-1559
+        else:
+            tx_dict["gasPrice"] = tx.gas_price or gas_prices.get("legacy_gas_price", 0)
+
+        # Add data for contract calls
+        if tx.data:
+            tx_dict["data"] = tx.data
+
+        # Assemble signed transaction from signature components
+        # Extract R, S, V from result
+        r = int.from_bytes(result.signature_r, byteorder='big')
+        s = int.from_bytes(result.signature_s, byteorder='big')
+        v = result.signature_v
+
+        # Create signed transaction
+        # For EIP-1559 transactions
+        if tx_dict.get("type") == 2:
+            from eth_account._utils.typed_transactions import TypedTransaction
+            unsigned_tx = TypedTransaction.from_dict(tx_dict)
+            # Manually encode with signature
+            signed_tx_bytes = unsigned_tx.encode((v, r, s))
+        else:
+            # Legacy transaction
+            unsigned_tx = serializable_unsigned_transaction_from_dict(tx_dict)
+            signed_tx_bytes = unsigned_tx.encode((v, r, s))
+
+        signed_tx_hex = "0x" + signed_tx_bytes.hex()
+        tx_hash = Web3.keccak(signed_tx_bytes).hex()
+
+        # Save to database
+        tx.signed_tx = signed_tx_hex
+        tx.tx_hash = "0x" + tx_hash
+
+        # Update status to SIGNED
+        if tx.status == TxStatus.SIGN_PENDING:
+            tx.status = TxStatus.SIGNED
+
+        await db.commit()
+
+        logger.info(f"Saved signed transaction {tx.id}: tx_hash={tx.tx_hash}")
+
+        # Broadcast transaction
+        tx.status = TxStatus.BROADCAST_PENDING
+        await db.commit()
+
+        try:
+            broadcast_tx_hash = await ethereum_service.broadcast_transaction(
+                signed_tx_hex,
+                tx.id,
+                str(uuid4())  # correlation_id
+            )
+
+            tx.tx_hash = broadcast_tx_hash
+            tx.status = TxStatus.BROADCASTED
+            await db.commit()
+
+            logger.info(f"Broadcasted transaction {tx.id}: tx_hash={broadcast_tx_hash}")
+
+            # Move to confirming state
+            tx.status = TxStatus.CONFIRMING
+            await db.commit()
+
+        except Exception as e:
+            logger.error(f"Broadcast failed for tx {tx.id}: {e}")
+            tx.status = TxStatus.FAILED_BROADCAST
+            await db.commit()
+            raise
 
 
 async def handle_dkg_start(
@@ -525,6 +662,8 @@ async def handle_sign_start(
         session_type="signing",
         user_id=user_id,
         keyset_id=keyset_id,
+        wallet_id=data.get("wallet_id"),
+        tx_request_id=tx_request_id,
     )
     
     logger.info(f"Starting signing session {session.session_id} for tx {tx_request_id}")
@@ -667,9 +806,26 @@ async def handle_sign_round(
                 "full_signature": result.full_signature.hex(),
             }
 
-            # TODO: Save signature to database and update transaction status
-            # For now, the REST API /sign endpoint handles this
-            # In future, move this logic here to avoid double-signing attempt
+            # Save signature to database and broadcast transaction
+            try:
+                await _finalize_signing(
+                    session=session,
+                    result=result,
+                    user_id=user_id,
+                )
+                logger.info(f"Signing finalized and broadcasted for session {session_id}: R={result.signature_r.hex()[:16]}...")
+            except Exception as e:
+                logger.exception(f"Failed to finalize signing for session {session_id}: {e}")
+                await websocket.send_json({
+                    "type": MessageType.SIGN_ERROR,
+                    "session_id": session_id,
+                    "data": {
+                        "error": f"Finalization failed: {str(e)}",
+                        "stage": "finalize",
+                    }
+                })
+                manager.cleanup_session(session_id)
+                return
 
             await websocket.send_json({
                 "type": MessageType.SIGN_COMPLETE,
