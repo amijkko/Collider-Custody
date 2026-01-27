@@ -35,22 +35,7 @@ export default function SignPage() {
     try {
       const txRes = await txRequestsApi.list();
       // Filter for transactions requiring user signature (SIGN_PENDING = MPC tx awaiting user)
-      // AND with non-expired permits
-      const now = new Date();
-      const pending = txRes.data.filter(tx => {
-        if (tx.status !== 'SIGN_PENDING') return false;
-
-        // Check permit expiration
-        if (tx.permit_expires_at) {
-          const expiresAt = new Date(tx.permit_expires_at);
-          if (expiresAt <= now) {
-            console.log(`Filtering out expired permit for tx ${tx.id}, expired at ${tx.permit_expires_at}`);
-            return false;
-          }
-        }
-
-        return true;
-      });
+      const pending = txRes.data.filter(tx => tx.status === 'SIGN_PENDING');
       setPendingTx(pending);
     } catch (error) {
       console.error('Failed to load data:', error);

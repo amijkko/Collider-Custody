@@ -638,7 +638,7 @@ class TxOrchestrator:
             policy_snapshot=tx.policy_result or {},
             approval_snapshot=approval_snapshot,
             audit_anchor_hash=audit_anchor_hash,
-            ttl_seconds=600,  # 10 minutes TTL for signing permit
+            ttl_seconds=86400,  # 24 hours TTL for signing permit (testing)
         )
         
         # Save permit to DB
