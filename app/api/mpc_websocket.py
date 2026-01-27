@@ -388,9 +388,9 @@ async def _finalize_signing(
         # Calculate transaction hash (keccak256 of signed transaction)
         tx_hash = Web3.to_hex(Web3.keccak(signed_tx_bytes))
 
-        # Save to database
+        # Save to database (Web3.to_hex already includes 0x prefix)
         tx.signed_tx = signed_tx_hex
-        tx.tx_hash = "0x" + tx_hash
+        tx.tx_hash = tx_hash
 
         # Update status to SIGNED
         if tx.status == TxStatus.SIGN_PENDING:
