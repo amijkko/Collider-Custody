@@ -57,7 +57,7 @@ async def create_tx_request(
         )
 
 
-@router.get("", response_model=CorrelatedResponse[List[TxRequestResponse]])
+@router.get("")
 async def list_tx_requests(
     wallet_id: Optional[str] = Query(None),
     status: Optional[TxStatus] = Query(None),
@@ -75,19 +75,23 @@ async def list_tx_requests(
         offset=offset
     )
 
-    # Add permit expiration if available
+    # Convert to response objects and add permit expiration
     result_txs = []
     for tx in txs:
-        tx_dict = TxRequestResponse.model_validate(tx).model_dump()
+        # Validate and convert to dict
+        tx_response = TxRequestResponse.model_validate(tx)
+        tx_dict = tx_response.model_dump()
+
         # Add permit expiration if available
         if hasattr(tx, 'signing_permit') and tx.signing_permit:
-            tx_dict['permit_expires_at'] = tx.signing_permit.expires_at
-        result_txs.append(TxRequestResponse(**tx_dict))
+            tx_dict['permit_expires_at'] = tx.signing_permit.expires_at.isoformat() if tx.signing_permit.expires_at else None
 
-    return CorrelatedResponse(
-        correlation_id=correlation_id,
-        data=result_txs
-    )
+        result_txs.append(tx_dict)
+
+    return {
+        "correlation_id": correlation_id,
+        "data": result_txs
+    }
 
 
 @router.get("/{tx_request_id}", response_model=CorrelatedResponse[TxRequestResponse])
