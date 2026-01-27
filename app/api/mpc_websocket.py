@@ -605,7 +605,7 @@ async def handle_sign_round(
     round_num = data.get("round", session.current_round + 1)
     user_message_raw = data.get("user_message", "")
 
-    logger.info(f"Sign round {round_num}: user_message_raw len={len(user_message_raw) if user_message_raw else 0}")
+    logger.info(f"Sign round {round_num}: user_message_raw len={len(user_message_raw) if user_message_raw else 0}, first_chars={user_message_raw[:50] if user_message_raw else 'EMPTY'}")
 
     # Parse user message - WASM returns JSON array with metadata (same as DKG)
     incoming_messages = []

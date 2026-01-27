@@ -618,7 +618,7 @@ export class MPCClient {
 
       if (round === 1) {
         // Start signing session in WASM
-        const result = await tssWasm.startSigning(
+        const startResult = await tssWasm.startSigning(
           this.currentSessionId!,
           this.partyIndex,
           this.currentMessageHash!,
@@ -626,7 +626,67 @@ export class MPCClient {
           this.totalParties,
           this.threshold
         );
-        userMessage = result.round1Msg;
+
+        // Collect all message objects to send
+        // Each message is an object like {ToPartyIndex, IsBroadcast, Payload}
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const messagesToSend: any[] = [];
+
+        // Parse round1Msg if it's a JSON array string
+        if (startResult.round1Msg) {
+          if (startResult.round1Msg.startsWith('[')) {
+            try {
+              const msgs = JSON.parse(startResult.round1Msg);
+              messagesToSend.push(...msgs);
+              console.log(`[MPC] Parsed ${msgs.length} messages from round1Msg`);
+            } catch {
+              // If not valid JSON array, just keep as-is (should not happen)
+              console.warn('[MPC] round1Msg is not valid JSON array');
+            }
+          }
+        }
+
+        // Also process the incoming bank message from round 1
+        if (bankMessage) {
+          console.log('[MPC] Processing bank round 1 message after startSigning');
+          const incomingMessages: tssWasm.IncomingMessage[] = [
+            { from_party: 0, payload: bankMessage },
+          ];
+          const processResult = await tssWasm.processSigningRound(
+            this.currentSessionId!,
+            1,
+            incomingMessages
+          );
+
+          // If there are outgoing messages from processing, add them
+          if (processResult.outgoingMsg) {
+            console.log('[MPC] Got additional outgoing message from processing bank round 1, size:', processResult.outgoingMsg.length);
+            // Parse outgoingMsg JSON array and add objects
+            if (processResult.outgoingMsg.startsWith('[')) {
+              try {
+                const msgArray = JSON.parse(processResult.outgoingMsg);
+                messagesToSend.push(...msgArray);
+                console.log(`[MPC] Unpacked ${msgArray.length} messages from processResult`);
+              } catch {
+                console.warn('[MPC] Failed to parse outgoingMsg as JSON array');
+              }
+            }
+          }
+
+          // Check if signing completed after processing bank's round 1
+          if (processResult.isFinal && processResult.result) {
+            console.log('[MPC] Local signing completed after processing bank round 1');
+            // Signature is ready - will be handled by backend
+          }
+        }
+
+        // Always send as JSON array of message objects
+        if (messagesToSend.length > 0) {
+          userMessage = JSON.stringify(messagesToSend);
+          console.log(`[MPC] Sending ${messagesToSend.length} messages as JSON array`);
+        } else {
+          userMessage = '';
+        }
       } else {
         // Process incoming bank message
         const incomingMessages: tssWasm.IncomingMessage[] = bankMessage
