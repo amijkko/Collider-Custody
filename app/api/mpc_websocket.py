@@ -352,13 +352,9 @@ async def _finalize_signing(
             "chainId": ethereum_service.chain_id,
         }
 
-        # Add gas price (legacy or EIP-1559)
-        if gas_prices.get("max_fee") and gas_prices.get("max_priority_fee"):
-            tx_dict["maxFeePerGas"] = gas_prices["max_fee"]
-            tx_dict["maxPriorityFeePerGas"] = gas_prices["max_priority_fee"]
-            tx_dict["type"] = 2  # EIP-1559
-        else:
-            tx_dict["gasPrice"] = tx.gas_price or gas_prices.get("legacy_gas_price", 0)
+        # Use legacy transactions for now (simpler to encode with manual signature)
+        # TODO: Add EIP-1559 support
+        tx_dict["gasPrice"] = tx.gas_price or gas_prices.get("legacy_gas_price", 0)
 
         # Add data for contract calls
         if tx.data:
@@ -370,20 +366,12 @@ async def _finalize_signing(
         s = int.from_bytes(result.signature_s, byteorder='big')
         v = result.signature_v
 
-        # Create signed transaction
-        # For EIP-1559 transactions
-        if tx_dict.get("type") == 2:
-            from eth_account._utils.typed_transactions import TypedTransaction
-            unsigned_tx = TypedTransaction.from_dict(tx_dict)
-            # Manually encode with signature
-            signed_tx_bytes = unsigned_tx.encode((v, r, s))
-        else:
-            # Legacy transaction
-            unsigned_tx = serializable_unsigned_transaction_from_dict(tx_dict)
-            signed_tx_bytes = unsigned_tx.encode((v, r, s))
+        # Legacy transaction - use standard eth_account encoding
+        unsigned_tx = serializable_unsigned_transaction_from_dict(tx_dict)
+        signed_tx_bytes = unsigned_tx.encode((v, r, s))
 
         signed_tx_hex = "0x" + signed_tx_bytes.hex()
-        tx_hash = Web3.keccak(signed_tx_bytes).hex()
+        tx_hash = "0x" + Web3.keccak(signed_tx_bytes).hex()
 
         # Save to database
         tx.signed_tx = signed_tx_hex
