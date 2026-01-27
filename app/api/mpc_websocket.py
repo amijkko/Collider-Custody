@@ -607,12 +607,30 @@ async def handle_sign_round(
 
     logger.info(f"Sign round {round_num}: user_message_raw len={len(user_message_raw) if user_message_raw else 0}")
 
-    # Parse user message - in TSS, some rounds may have no messages, which is normal
+    # Parse user message - WASM returns JSON array with metadata (same as DKG)
     incoming_messages = []
     if user_message_raw:
-        user_message = bytes.fromhex(user_message_raw)
-        incoming_messages = [(1, user_message)]
-        logger.info(f"Signing round {round_num}: user message size={len(user_message)} bytes")
+        # Check if it's JSON format with metadata (starts with '[{')
+        if user_message_raw.startswith('[{') or user_message_raw.startswith('[{"'):
+            # New format: JSON array with metadata
+            logger.info(f"Signing round {round_num}: received JSON message from user (new format)")
+            incoming_messages.append((1, user_message_raw.encode('utf-8')))
+        elif user_message_raw.startswith('['):
+            # Old format: JSON array of hex strings
+            try:
+                message_list = json.loads(user_message_raw)
+                logger.info(f"Signing round {round_num}: received {len(message_list)} hex messages from user (old format)")
+                for msg_hex in message_list:
+                    if msg_hex:
+                        incoming_messages.append((1, bytes.fromhex(msg_hex)))
+            except json.JSONDecodeError:
+                # Not valid JSON, treat as single hex string
+                incoming_messages = [(1, bytes.fromhex(user_message_raw))]
+        else:
+            # Single hex string
+            user_message = bytes.fromhex(user_message_raw)
+            incoming_messages = [(1, user_message)]
+            logger.info(f"Signing round {round_num}: single hex message, size={len(user_message)} bytes")
     else:
         logger.info(f"Signing round {round_num}: no user message (empty/no outgoing from user)")
 

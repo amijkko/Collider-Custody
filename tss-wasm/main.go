@@ -585,11 +585,24 @@ func signingRound(this js.Value, args []js.Value) interface{} {
 		return errorResult(fmt.Sprintf("signing error: %v", err))
 
 	default:
-		outMsgs := collectOutgoingMessages(session.OutChan, 500*time.Millisecond)
+		// Give party time to process and generate outgoing messages
+		time.Sleep(100 * time.Millisecond)
+
+		// Collect outgoing messages with metadata (same as DKG)
+		outMsgs := collectOutgoingMessagesWithMeta(session.OutChan, 3*time.Second, session.SortedIDs)
 
 		var outMsgHex string
 		if len(outMsgs) > 0 {
-			outMsgHex = hex.EncodeToString(outMsgs[0])
+			// Return as JSON array with metadata (same format as bank signer)
+			jsonBytes, err := json.Marshal(outMsgs)
+			if err != nil {
+				return errorResult(fmt.Sprintf("failed to serialize outgoing messages: %v", err))
+			}
+			outMsgHex = string(jsonBytes)
+			fmt.Printf("[TSS-WASM] Signing round %d: collected %d outgoing messages\n",
+				round, len(outMsgs))
+		} else {
+			fmt.Printf("[TSS-WASM] Signing round %d: no outgoing messages\n", round)
 		}
 
 		session.CurrentRound = round + 1

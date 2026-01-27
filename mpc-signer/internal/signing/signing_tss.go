@@ -5,6 +5,7 @@ package signing
 
 import (
 	"crypto/ecdsa"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -205,22 +206,66 @@ func (h *SigningHandler) ProcessRound(
 
 		fromPartyID := session.partyIDs[incoming.FromPartyIndex]
 
-		// Parse the wire message with correct sender
-		parsedMsg, err := tss.ParseWireMessage(incoming.Payload, fromPartyID, true)
-		if err != nil {
-			h.logger.Warn("Failed to parse message",
-				zap.Error(err),
-				zap.Int("from_party", incoming.FromPartyIndex),
-			)
-			continue
+		// Try to parse payload as JSON array of OutgoingMessage (new format from WASM)
+		type UserOutgoingMessage struct {
+			ToPartyIndex int    `json:"ToPartyIndex"`
+			IsBroadcast  bool   `json:"IsBroadcast"`
+			Payload      string `json:"Payload"` // hex-encoded
 		}
-
-		// Update party state (sequential, no goroutine to avoid race)
-		if _, err := session.party.Update(parsedMsg); err != nil {
-			h.logger.Warn("Failed to update party",
-				zap.Error(err),
+		var userMsgs []UserOutgoingMessage
+		if err := json.Unmarshal(incoming.Payload, &userMsgs); err == nil && len(userMsgs) > 0 {
+			h.logger.Debug("Parsed user messages from JSON",
+				zap.Int("count", len(userMsgs)),
 				zap.Int("from_party", incoming.FromPartyIndex),
 			)
+			// Process each message
+			for _, userMsg := range userMsgs {
+				// Decode hex payload
+				payloadBytes, decodeErr := hex.DecodeString(userMsg.Payload)
+				if decodeErr != nil {
+					h.logger.Warn("Failed to decode hex payload",
+						zap.Error(decodeErr),
+						zap.Int("from_party", incoming.FromPartyIndex),
+					)
+					continue
+				}
+
+				// Parse the wire message
+				parsedMsg, parseErr := tss.ParseWireMessage(payloadBytes, fromPartyID, userMsg.IsBroadcast)
+				if parseErr != nil {
+					h.logger.Warn("Failed to parse wire message",
+						zap.Error(parseErr),
+						zap.Int("from_party", incoming.FromPartyIndex),
+					)
+					continue
+				}
+
+				// Update party state
+				if _, updateErr := session.party.Update(parsedMsg); updateErr != nil {
+					h.logger.Warn("Failed to update party",
+						zap.Error(updateErr),
+						zap.Int("from_party", incoming.FromPartyIndex),
+					)
+				}
+			}
+		} else {
+			// Fallback: try parsing as raw wire message (old format)
+			parsedMsg, err := tss.ParseWireMessage(incoming.Payload, fromPartyID, true)
+			if err != nil {
+				h.logger.Warn("Failed to parse message",
+					zap.Error(err),
+					zap.Int("from_party", incoming.FromPartyIndex),
+				)
+				continue
+			}
+
+			// Update party state (sequential, no goroutine to avoid race)
+			if _, err := session.party.Update(parsedMsg); err != nil {
+				h.logger.Warn("Failed to update party",
+					zap.Error(err),
+					zap.Int("from_party", incoming.FromPartyIndex),
+				)
+			}
 		}
 	}
 
