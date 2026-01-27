@@ -534,14 +534,43 @@ func signingRound(this js.Value, args []js.Value) interface{} {
 			return errorResult(fmt.Sprintf("invalid message payload: %v", err))
 		}
 
-		parsedMsg, err := tss.ParseWireMessage(payload, session.SortedIDs[fromParty], true)
-		if err != nil {
-			return errorResult(fmt.Sprintf("failed to parse message from party %d: %v", fromParty, err))
+		// Bank Node sends JSON array of OutgoingMessages, parse it
+		var bankMessages []BankOutgoingMessage
+		if err := json.Unmarshal(payload, &bankMessages); err != nil {
+			// If not JSON array, try as raw wire bytes
+			fmt.Printf("[TSS-WASM] Payload is not JSON array, trying as raw wire bytes\n")
+			parsedMsg, parseErr := tss.ParseWireMessage(payload, session.SortedIDs[fromParty], true)
+			if parseErr != nil {
+				return errorResult(fmt.Sprintf("failed to parse message from party %d: %v", fromParty, parseErr))
+			}
+			ok, updateErr := session.Party.Update(parsedMsg)
+			if !ok && updateErr != nil {
+				return errorResult(fmt.Sprintf("party update failed: %v", updateErr))
+			}
+			continue
 		}
 
-		ok, updateErr := session.Party.Update(parsedMsg)
-		if !ok {
-			if updateErr != nil {
+		fmt.Printf("[TSS-WASM] Parsed %d bank messages from JSON\n", len(bankMessages))
+
+		// Process each message from the bank
+		for _, bankMsg := range bankMessages {
+			if len(bankMsg.Payload) == 0 {
+				continue
+			}
+
+			fmt.Printf("[TSS-WASM] Processing bank message: ToParty=%d, IsBroadcast=%v, PayloadLen=%d\n",
+				bankMsg.ToPartyIndex, bankMsg.IsBroadcast, len(bankMsg.Payload))
+
+			// Parse wire message
+			parsedMsg, parseErr := tss.ParseWireMessage(bankMsg.Payload, session.SortedIDs[fromParty], bankMsg.IsBroadcast)
+			if parseErr != nil {
+				return errorResult(fmt.Sprintf("failed to parse bank message: %v", parseErr))
+			}
+
+			// Update the party
+			ok, updateErr := session.Party.Update(parsedMsg)
+			fmt.Printf("[TSS-WASM] Party.Update result: ok=%v, err=%v\n", ok, updateErr)
+			if !ok && updateErr != nil {
 				return errorResult(fmt.Sprintf("party update failed: %v", updateErr))
 			}
 		}
