@@ -24,7 +24,7 @@ test.describe('Authentication Smoke Tests', () => {
   test('E2E-AUTH-01: Register → auto-enroll Retail', async ({ page }) => {
     const testId = Date.now();
     const username = `smoke_${testId}`;
-    const email = `smoke_${testId}@test.local`;
+    const email = `smoke_${testId}@example.com`;
     const password = 'SmokeTest2026!';
 
     // Register
@@ -34,12 +34,21 @@ test.describe('Authentication Smoke Tests', () => {
       console.log('Registration failed or user exists, checking enrollment');
     }
 
-    // Login to get token
-    try {
-      await login(page, username, password);
+    // Check if already logged in after registration (frontend may auto-login)
+    let token = await page.evaluate(() => localStorage.getItem('access_token'));
 
-      // Check enrollment via API
-      const token = await page.evaluate(() => localStorage.getItem('access_token'));
+    // If not logged in, try to login
+    if (!token) {
+      try {
+        await login(page, username, password);
+        token = await page.evaluate(() => localStorage.getItem('access_token'));
+      } catch (error) {
+        console.log('Login failed:', error);
+      }
+    }
+
+    // Check enrollment via API
+    try {
 
       if (token) {
         // Get groups and check if user is in Retail

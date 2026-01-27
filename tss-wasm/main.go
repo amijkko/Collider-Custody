@@ -487,17 +487,23 @@ func startSigning(this js.Value, args []js.Value) interface{} {
 		}
 	}()
 
-	// Collect round 1 messages
-	round1Msgs := collectOutgoingMessages(outChan, 2*time.Second)
+	// Collect round 1 messages with metadata (same as DKG)
+	round1Msgs := collectOutgoingMessagesWithMeta(outChan, 2*time.Second, sortedPartyIDs)
 	if len(round1Msgs) == 0 {
 		return errorResult("failed to generate round 1 message")
 	}
 
-	fmt.Printf("[TSS-WASM] Signing started, round 1 msg size: %d bytes\n", len(round1Msgs[0]))
+	// Return as JSON array with metadata (same format as DKG)
+	jsonBytes, err := json.Marshal(round1Msgs)
+	if err != nil {
+		return errorResult(fmt.Sprintf("failed to serialize round 1 messages: %v", err))
+	}
+
+	fmt.Printf("[TSS-WASM] Signing started, round 1 msg count: %d, first size: %d bytes\n", len(round1Msgs), len(round1Msgs[0].Payload))
 
 	return js.ValueOf(map[string]interface{}{
 		"success":    true,
-		"round1_msg": hex.EncodeToString(round1Msgs[0]),
+		"round1_msg": string(jsonBytes),
 	})
 }
 

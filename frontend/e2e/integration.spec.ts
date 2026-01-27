@@ -17,7 +17,7 @@ const API_URL = process.env.E2E_API_URL || 'http://localhost:8000';
 // Use existing test user (created by backend E2E test) or fallback
 const TEST_USER = {
   username: 'e2e_user_1575',
-  email: 'e2e_user_1575@test.local',
+  email: 'e2e_user_1575@example.com',
   password: 'TestPass2026!',
 };
 
@@ -25,7 +25,7 @@ const TEST_USER = {
 const testRunId = Date.now();
 const NEW_USER = {
   username: `integ_${testRunId}`,
-  email: `integ_${testRunId}@test.local`,
+  email: `integ_${testRunId}@example.com`,
   password: 'IntegTest2026!',
 };
 
@@ -255,6 +255,9 @@ test.describe('Full Integration Test', () => {
     });
 
     test('3.1 Create MPC wallet if needed', async ({ page }) => {
+      // Increase timeout for DKG (can take 1-2 minutes)
+      test.setTimeout(180000);
+
       await page.goto('/app');
       await page.waitForLoadState('networkidle');
 
@@ -269,20 +272,53 @@ test.describe('Full Integration Test', () => {
         return;
       }
 
-      // Try to create wallet via UI
-      const createBtn = page.getByRole('button', { name: /create|new wallet/i }).first();
+      // Click Create Wallet button
+      const createBtn = page.getByRole('button', { name: /create.*wallet|new.*wallet/i }).first();
       if (await createBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
         await createBtn.click();
-        await page.waitForTimeout(5000);
+        await page.waitForTimeout(1000);
+
+        // MPC should be selected by default, click Continue
+        const continueBtn = page.getByRole('button', { name: /continue/i });
+        if (await continueBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+          await continueBtn.click();
+          await page.waitForTimeout(500);
+
+          // Enter password
+          const passwordField = page.getByPlaceholder(/password/i).first();
+          if (await passwordField.isVisible({ timeout: 3000 }).catch(() => false)) {
+            await passwordField.fill('IntegTest2026!');
+            const confirmField = page.getByPlaceholder(/confirm/i);
+            if (await confirmField.isVisible({ timeout: 1000 }).catch(() => false)) {
+              await confirmField.fill('IntegTest2026!');
+            }
+
+            // Click Create button to start DKG
+            const startBtn = page.getByRole('button', { name: /create wallet|start/i });
+            if (await startBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+              await startBtn.click();
+            }
+
+            // Wait for DKG to complete (success or wallet address visible)
+            try {
+              await page.waitForSelector('text=/Wallet Created|0x[a-fA-F0-9]{40}/i', { timeout: 120000 });
+              console.log('MPC wallet created successfully');
+            } catch {
+              console.log('DKG may have timed out or failed');
+            }
+          }
+        }
       }
 
       // Verify via API
+      await page.waitForTimeout(2000);
       const updatedWallets = await api('GET', '/v1/wallets', userToken);
       const newWallet = updatedWallets.data?.find((w: any) => w.custody_backend === 'MPC_TECDSA');
 
       if (newWallet) {
         userWalletId = newWallet.id;
         userWalletAddress = newWallet.address;
+        console.log('Created wallet:', userWalletAddress);
       }
 
       expect(userWalletId || userWalletAddress).toBeTruthy();

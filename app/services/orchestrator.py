@@ -938,15 +938,18 @@ class TxOrchestrator:
     ) -> list:
         """List transaction requests with optional filters."""
         from sqlalchemy.orm import selectinload
-        query = select(TxRequest).options(selectinload(TxRequest.approvals))
-        
+        query = select(TxRequest).options(
+            selectinload(TxRequest.approvals),
+            selectinload(TxRequest.signing_permit)
+        )
+
         if wallet_id:
             query = query.where(TxRequest.wallet_id == wallet_id)
         if status:
             query = query.where(TxRequest.status == status)
-        
+
         query = query.order_by(TxRequest.created_at.desc()).limit(limit).offset(offset)
-        
+
         result = await self.db.execute(query)
         return list(result.scalars().all())
 

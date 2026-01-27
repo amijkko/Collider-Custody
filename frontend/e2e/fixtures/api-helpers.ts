@@ -5,7 +5,11 @@
  * are faster/more reliable than UI interactions.
  */
 
+import { ethers } from 'ethers';
+
 const API_URL = process.env.E2E_API_URL || 'http://localhost:8000';
+const SEPOLIA_RPC = process.env.E2E_SEPOLIA_RPC || 'https://ethereum-sepolia-rpc.publicnode.com';
+const FUNDING_PRIVATE_KEY = process.env.E2E_FUNDING_PRIVATE_KEY;
 
 export interface ApiResponse<T = any> {
   data?: T;
@@ -289,4 +293,59 @@ export async function waitForDeposit(
   }
 
   throw new Error(`Timeout waiting for deposit on wallet ${walletId}`);
+}
+
+/**
+ * Send ETH from funding wallet to target address (Sepolia testnet)
+ * Used for automated golden path testing
+ */
+export async function fundWallet(
+  toAddress: string,
+  amountEth: string
+): Promise<{ txHash: string; success: boolean; error?: string }> {
+  if (!FUNDING_PRIVATE_KEY) {
+    return { txHash: '', success: false, error: 'E2E_FUNDING_PRIVATE_KEY not set' };
+  }
+
+  try {
+    const provider = new ethers.JsonRpcProvider(SEPOLIA_RPC);
+    const wallet = new ethers.Wallet(FUNDING_PRIVATE_KEY, provider);
+
+    const amount = ethers.parseEther(amountEth);
+
+    console.log(`Funding ${toAddress} with ${amountEth} ETH from ${wallet.address}`);
+
+    const tx = await wallet.sendTransaction({
+      to: toAddress,
+      value: amount,
+    });
+
+    console.log(`Transaction sent: ${tx.hash}`);
+
+    // Wait for confirmation
+    const receipt = await tx.wait();
+    console.log(`Transaction confirmed in block ${receipt?.blockNumber}`);
+
+    return { txHash: tx.hash, success: true };
+  } catch (error) {
+    console.error('Funding failed:', error);
+    return { txHash: '', success: false, error: String(error) };
+  }
+}
+
+/**
+ * Get balance of funding wallet
+ */
+export async function getFundingWalletBalance(): Promise<string> {
+  try {
+    const provider = new ethers.JsonRpcProvider(SEPOLIA_RPC);
+    const address = process.env.E2E_FUNDING_ADDRESS;
+    if (!address) return '0';
+
+    const balance = await provider.getBalance(address);
+    return ethers.formatEther(balance);
+  } catch (error) {
+    console.error('Failed to get funding wallet balance:', error);
+    return '0';
+  }
 }

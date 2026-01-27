@@ -93,3 +93,8 @@ e2e/.auth/*.json
 postgres_data/
 mpc_shares/
 
+
+# E2E test secrets
+frontend/e2e/.env.test
+.vercel
+.env*.local

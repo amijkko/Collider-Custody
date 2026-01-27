@@ -1,4 +1,9 @@
 import { defineConfig, devices } from '@playwright/test';
+import * as dotenv from 'dotenv';
+import * as path from 'path';
+
+// Load E2E test environment variables
+dotenv.config({ path: path.resolve(__dirname, 'e2e/.env.test') });
 
 /**
  * Playwright E2E Test Configuration for Collider Custody Frontend

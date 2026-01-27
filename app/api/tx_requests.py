@@ -65,19 +65,50 @@ async def list_tx_requests(
     offset: int = Query(0, ge=0),
     orchestrator: TxOrchestrator = Depends(get_orchestrator),
     current_user: User = Depends(get_current_user),
-    correlation_id: str = Depends(get_correlation_id)
+    correlation_id: str = Depends(get_correlation_id),
+    db: AsyncSession = Depends(get_db)
 ):
     """List transaction requests with optional filters."""
+    from app.models.wallet import Wallet
+    from sqlalchemy import select
+
+    # Get user's wallets
+    wallet_result = await db.execute(
+        select(Wallet.id).where(Wallet.subject_id == current_user.subject_id)
+    )
+    user_wallet_ids = [str(w) for w in wallet_result.scalars().all()]
+
+    # If wallet_id specified, ensure it belongs to user
+    if wallet_id and wallet_id not in user_wallet_ids:
+        return CorrelatedResponse(
+            correlation_id=correlation_id,
+            data=[]
+        )
+
+    # Filter by user's wallets
+    filter_wallet_id = wallet_id if wallet_id else (user_wallet_ids[0] if len(user_wallet_ids) == 1 else None)
+
+    # Get transactions (will be filtered by user's wallets in the query)
     txs = await orchestrator.list_tx_requests(
-        wallet_id=wallet_id,
+        wallet_id=filter_wallet_id,
         status=status,
         limit=limit,
         offset=offset
     )
-    
+
+    # Filter to only user's wallets and add permit expiration
+    filtered_txs = []
+    for tx in txs:
+        if tx.wallet_id in user_wallet_ids:
+            tx_dict = TxRequestResponse.model_validate(tx).model_dump()
+            # Add permit expiration if available
+            if hasattr(tx, 'signing_permit') and tx.signing_permit:
+                tx_dict['permit_expires_at'] = tx.signing_permit.expires_at
+            filtered_txs.append(TxRequestResponse(**tx_dict))
+
     return CorrelatedResponse(
         correlation_id=correlation_id,
-        data=[TxRequestResponse.model_validate(tx) for tx in txs]
+        data=filtered_txs
     )
 
 

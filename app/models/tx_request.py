@@ -149,6 +149,13 @@ class TxRequest(Base):
     # Relationships
     approvals: Mapped[List["Approval"]] = relationship("Approval", back_populates="tx_request", lazy="selectin")
     kyt_case: Mapped[Optional["KYTCase"]] = relationship("KYTCase", back_populates="tx_request", lazy="selectin")
+    wallet: Mapped["Wallet"] = relationship("Wallet", foreign_keys=[wallet_id], lazy="selectin")
+    signing_permit: Mapped[Optional["SigningPermit"]] = relationship(
+        "SigningPermit",
+        foreign_keys="SigningPermit.tx_request_id",
+        uselist=False,
+        lazy="selectin"
+    )
     
     __table_args__ = (
         Index("ix_tx_requests_status_created", "status", "created_at"),

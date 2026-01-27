@@ -9,6 +9,9 @@ import {
   ethToWei,
   getDeposits,
   approveDeposit,
+  fundWallet,
+  waitForDeposit,
+  getFundingWalletBalance,
 } from './fixtures/api-helpers';
 import {
   login,
@@ -105,98 +108,159 @@ test.describe('INT-GOLD-01: Golden Path Integration', () => {
     }
   });
 
-  test('Step 3: Create wallet', async ({ page }) => {
-    // Create wallet via UI
-    await page.goto('/app/wallets');
+  test('Step 3: Create MPC wallet', async ({ page }) => {
+    // MPC DKG takes 1-2 minutes
+    test.setTimeout(180000);
+
+    // Navigate first, then set token
+    await page.goto('/login');
+    await page.waitForLoadState('domcontentloaded');
+    await page.evaluate((token) => localStorage.setItem('access_token', token), userToken);
+    await page.goto('/app');
     await page.waitForLoadState('networkidle');
 
-    // Click create wallet button
-    const createBtn = page.getByRole('button', { name: /create|new|add/i });
-    if (await createBtn.isVisible({ timeout: 5000 })) {
+    // Check if wallet already exists
+    const existingWallets = await getWallets(userToken);
+    const mpcWallet = existingWallets.find((w: any) => w.custody_backend === 'MPC_TECDSA');
+
+    if (mpcWallet) {
+      walletId = mpcWallet.id;
+      walletAddress = mpcWallet.address;
+      console.log(`Using existing MPC wallet: ${walletAddress}`);
+      return;
+    }
+
+    // Look for Create Wallet button
+    const createBtn = page.getByRole('button', { name: /create.*wallet|new.*wallet/i }).first();
+
+    if (await createBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
       await createBtn.click();
+      await page.waitForTimeout(1000);
 
-      // Fill wallet form
-      const nameInput = page.getByPlaceholder(/name/i);
-      if (await nameInput.isVisible({ timeout: 3000 })) {
-        await nameInput.fill(`Golden_${Date.now()}`);
+      // MPC should be selected by default, click Continue
+      const continueBtn = page.getByRole('button', { name: /continue/i });
+      if (await continueBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+        await continueBtn.click();
+        await page.waitForTimeout(500);
+
+        // Enter password for MPC key encryption
+        const passwordField = page.getByPlaceholder(/password/i).first();
+        if (await passwordField.isVisible({ timeout: 3000 }).catch(() => false)) {
+          await passwordField.fill(testPassword);
+
+          // Confirm password if there's a second field
+          const confirmField = page.getByPlaceholder(/confirm/i);
+          if (await confirmField.isVisible({ timeout: 1000 }).catch(() => false)) {
+            await confirmField.fill(testPassword);
+          }
+
+          // Click Create Wallet
+          const finalCreateBtn = page.getByRole('button', { name: /create.*wallet/i });
+          if (await finalCreateBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+            await finalCreateBtn.click();
+
+            // Wait for DKG process (shows progress indicator)
+            console.log('Starting MPC DKG process...');
+            await page.waitForTimeout(5000);
+
+            // Wait for wallet to appear in API (DKG takes time)
+            const maxWaitTime = 150000;
+            const startTime = Date.now();
+
+            while (Date.now() - startTime < maxWaitTime) {
+              const wallets = await getWallets(userToken);
+              const newMpcWallet = wallets.find((w: any) => w.custody_backend === 'MPC_TECDSA');
+
+              if (newMpcWallet) {
+                walletId = newMpcWallet.id;
+                walletAddress = newMpcWallet.address;
+                console.log(`MPC wallet created: ${walletAddress}`);
+                break;
+              }
+
+              await page.waitForTimeout(5000);
+              console.log('Waiting for MPC wallet creation...');
+            }
+          }
+        }
       }
-
-      // Select network if needed
-      const networkSelect = page.getByRole('combobox').first();
-      if (await networkSelect.isVisible({ timeout: 2000 })) {
-        await networkSelect.click();
-        await page.getByText(/sepolia/i).first().click();
-      }
-
-      // Submit
-      await page.getByRole('button', { name: /create|submit/i }).click();
-      await page.waitForTimeout(3000);
     }
 
-    // Get wallet via API
-    const wallets = await getWallets(userToken);
-
-    if (wallets.length === 0) {
-      // Create via API as fallback
-      const result = await api('POST', '/v1/wallets', userToken, {
-        wallet_type: 'RETAIL',
-        subject_id: testUsername,
-      });
-      console.log('Wallet creation result:', result);
-      expect(result.data).toBeTruthy();
-      walletId = result.data.id;
-      walletAddress = result.data.address;
-    } else {
-      walletId = wallets[0].id;
-      walletAddress = wallets[0].address;
+    // Verify wallet was created
+    if (!walletId) {
+      const wallets = await getWallets(userToken);
+      if (wallets.length > 0) {
+        walletId = wallets[0].id;
+        walletAddress = wallets[0].address;
+      }
     }
 
-    console.log(`Wallet created: ${walletAddress}`);
     expect(walletAddress).toMatch(/^0x[a-fA-F0-9]{40}$/);
+    console.log(`Final wallet: ${walletAddress}`);
   });
 
   test('Step 4: Fund wallet (external deposit)', async () => {
     // This step sends ETH from funding wallet to user's custody wallet
-    // In a real test, we would use the private key from .env.test
+    test.setTimeout(120000); // 2 minutes for blockchain tx
 
+    if (!walletAddress) {
+      test.skip(true, 'No wallet address available');
+      return;
+    }
+
+    // Check funding wallet balance
+    const fundingBalance = await getFundingWalletBalance();
+    console.log(`Funding wallet balance: ${fundingBalance} ETH`);
+
+    if (parseFloat(fundingBalance) < parseFloat(AMOUNTS.FUNDING)) {
+      test.skip(true, `Insufficient funding balance: ${fundingBalance} ETH`);
+      return;
+    }
+
+    // Send ETH from funding wallet to user's MPC wallet
     console.log(`\n${'='.repeat(60)}`);
-    console.log('MANUAL STEP REQUIRED:');
-    console.log(`Send ${AMOUNTS.FUNDING} ETH to: ${walletAddress}`);
+    console.log(`Sending ${AMOUNTS.FUNDING} ETH to: ${walletAddress}`);
     console.log(`From funding wallet: ${TEST_ADDRESSES.FUNDING_WALLET}`);
     console.log(`${'='.repeat(60)}\n`);
 
-    // For automated tests, we would do:
-    // const { ethers } = require('ethers');
-    // const provider = new ethers.JsonRpcProvider(process.env.E2E_SEPOLIA_RPC);
-    // const fundingWallet = new ethers.Wallet(process.env.E2E_FUNDING_PRIVATE_KEY, provider);
-    // const tx = await fundingWallet.sendTransaction({
-    //   to: walletAddress,
-    //   value: ethers.parseEther(AMOUNTS.FUNDING)
-    // });
-    // await tx.wait();
+    const result = await fundWallet(walletAddress, AMOUNTS.FUNDING);
 
-    // For now, we'll check if there's already a deposit or skip
-    test.skip(true, 'Manual funding required - run separately');
+    if (!result.success) {
+      console.log(`Funding failed: ${result.error}`);
+      test.skip(true, `Funding failed: ${result.error}`);
+      return;
+    }
+
+    console.log(`Funding transaction confirmed: ${result.txHash}`);
+    expect(result.txHash).toBeTruthy();
   });
 
   test('Step 5: Verify deposit detected', async () => {
-    // Wait for chain listener to detect deposit
-    let deposits: any[] = [];
-    const maxAttempts = 10;
+    // Wait for chain listener to detect deposit (up to 2 minutes)
+    test.setTimeout(150000);
 
-    for (let i = 0; i < maxAttempts; i++) {
-      deposits = await getDeposits(adminToken, walletId);
-      if (deposits.length > 0) {
-        depositId = deposits[0].id;
-        console.log(`Deposit detected: ${depositId}`);
-        break;
-      }
-      await new Promise(resolve => setTimeout(resolve, 10000));
+    if (!walletId) {
+      test.skip(true, 'No wallet ID available');
+      return;
     }
 
-    if (deposits.length === 0) {
-      console.log('No deposits detected yet - chain listener may need more time');
-      test.skip(true, 'Deposit not yet detected');
+    console.log('Waiting for deposit to be detected by chain listener...');
+
+    try {
+      const deposit = await waitForDeposit(adminToken, walletId, 120000, 10000);
+      depositId = deposit.id;
+      console.log(`Deposit detected: ${depositId} (status: ${deposit.status})`);
+      expect(depositId).toBeTruthy();
+    } catch (error) {
+      console.log('Deposit not detected within timeout:', error);
+      // Check if there are any deposits at all
+      const deposits = await getDeposits(adminToken, walletId);
+      if (deposits.length > 0) {
+        depositId = deposits[0].id;
+        console.log(`Found deposit: ${depositId} (status: ${deposits[0].status})`);
+      } else {
+        test.skip(true, 'Deposit not yet detected by chain listener');
+      }
     }
   });
 

@@ -136,6 +136,7 @@ export interface WithdrawRequest {
   created_at: string;
   updated_at: string;
   created_by: string;
+  permit_expires_at: string | null;
 }
 
 export type WithdrawStatus =
