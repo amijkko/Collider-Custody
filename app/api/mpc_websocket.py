@@ -603,19 +603,22 @@ async def handle_sign_round(
         return
     
     round_num = data.get("round", session.current_round + 1)
-    user_message_raw = data.get("user_message")
+    user_message_raw = data.get("user_message", "")
 
-    logger.info(f"Sign round {round_num}: data keys={list(data.keys())}, user_message_raw type={type(user_message_raw).__name__}, len={len(user_message_raw) if user_message_raw else 0}")
+    logger.info(f"Sign round {round_num}: user_message_raw len={len(user_message_raw) if user_message_raw else 0}")
 
-    user_message = None
+    # Parse user message - in TSS, some rounds may have no messages, which is normal
+    incoming_messages = []
     if user_message_raw:
         user_message = bytes.fromhex(user_message_raw)
-    
+        incoming_messages = [(1, user_message)]
+        logger.info(f"Signing round {round_num}: user message size={len(user_message)} bytes")
+    else:
+        logger.info(f"Signing round {round_num}: no user message (empty/no outgoing from user)")
+
+    # Important: Always process round on bank signer, even if no incoming messages
+    # The TSS protocol needs to advance on both sides
     try:
-        # Process round on bank signer
-        # User is party 1
-        incoming_messages = [(1, user_message)] if user_message else []
-        logger.info(f"Signing round {round_num}: incoming_msg_size={len(user_message) if user_message else 0}")
 
         success, out_msg, result, is_final, error = await mpc_client.process_signing_round(
             session_id=session_id,
