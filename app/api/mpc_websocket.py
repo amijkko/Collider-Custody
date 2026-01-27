@@ -382,8 +382,11 @@ async def _finalize_signing(
         tx_list = [nonce, gas_price, gas, to, value, data, v, r, s]
         signed_tx_bytes = rlp.encode(tx_list)
 
-        signed_tx_hex = "0x" + signed_tx_bytes.hex()
-        tx_hash = "0x" + Web3.keccak(signed_tx_bytes).hex()
+        # Assemble hex strings with proper 0x prefix
+        signed_tx_hex = Web3.to_hex(signed_tx_bytes)
+
+        # Calculate transaction hash (keccak256 of signed transaction)
+        tx_hash = Web3.to_hex(Web3.keccak(signed_tx_bytes))
 
         # Save to database
         tx.signed_tx = signed_tx_hex
