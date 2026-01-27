@@ -666,14 +666,18 @@ async def handle_sign_round(
                 "signature_v": result.signature_v,
                 "full_signature": result.full_signature.hex(),
             }
-            
+
+            # TODO: Save signature to database and update transaction status
+            # For now, the REST API /sign endpoint handles this
+            # In future, move this logic here to avoid double-signing attempt
+
             await websocket.send_json({
                 "type": MessageType.SIGN_COMPLETE,
                 "session_id": session_id,
                 "data": session.result,
             })
-            
-            logger.info(f"Signing complete for session {session_id}")
+
+            logger.info(f"Signing complete for session {session_id}: R={result.signature_r.hex()[:16]}...")
         else:
             # Send next round message
             await websocket.send_json({

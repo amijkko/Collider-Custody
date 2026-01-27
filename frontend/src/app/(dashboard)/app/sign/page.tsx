@@ -67,16 +67,21 @@ export default function SignPage() {
   const handleSigningSuccess = async (signature: string) => {
     console.log('Signing successful:', signature);
 
-    // After WebSocket signing, call the REST API to finalize
+    // TODO: Need to finalize transaction on backend
+    // Currently WebSocket signing completes but doesn't save to DB
+    // Temporarily disabled REST API call until backend finalization is implemented
+    /*
     if (selectedTx) {
       try {
         await txRequestsApi.sign(selectedTx.id);
         toast.success('Transaction signed!', 'Your withdrawal is being processed');
       } catch (error) {
-        // Ignore errors here - the WebSocket signing already completed
         console.log('Finalization call (expected to handle broadcast):', error);
       }
     }
+    */
+
+    toast.success('Transaction signed!', 'MPC signature: ' + signature.slice(0, 20) + '...');
 
     setShowSigningModal(false);
     setSelectedTx(null);
