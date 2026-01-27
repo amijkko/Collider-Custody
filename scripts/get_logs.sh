@@ -3,7 +3,7 @@
 # Usage: ./scripts/get_logs.sh [railway|vercel] [lines]
 
 RAILWAY_TOKEN="2dfd15da-f059-4f24-8696-4ee1d94989db"
-VERCEL_TOKEN="k4DXJemVS2G9G3zIOgZ4iQcg"
+VERCEL_TOKEN="Orh77qA9NqFDStuiWQ2W8D9i"
 
 # Railway service IDs
 RAILWAY_PROJECT_ID="af7672fd-2a05-49cb-862a-ea4ee201aebe"
