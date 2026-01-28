@@ -34,8 +34,28 @@ export default function SignPage() {
   const loadData = React.useCallback(async () => {
     try {
       const txRes = await txRequestsApi.list();
+
       // Filter for transactions requiring user signature (SIGN_PENDING = MPC tx awaiting user)
-      const pending = txRes.data.filter(tx => tx.status === 'SIGN_PENDING');
+      // Only show recent transactions (last 24 hours) to avoid showing old stuck transactions
+      const now = new Date();
+      const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+      const pending = txRes.data.filter(tx => {
+        if (tx.status !== 'SIGN_PENDING') return false;
+
+        // Only show transactions created in last 24 hours
+        const createdAt = new Date(tx.created_at);
+        if (createdAt < oneDayAgo) return false;
+
+        // If permit exists, check it's not expired
+        if (tx.permit_expires_at) {
+          const permitExpires = new Date(tx.permit_expires_at);
+          if (permitExpires < now) return false;
+        }
+
+        return true;
+      });
+
       setPendingTx(pending);
     } catch (error) {
       console.error('Failed to load data:', error);
