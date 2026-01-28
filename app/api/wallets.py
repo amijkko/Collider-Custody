@@ -368,9 +368,35 @@ async def get_wallet_ledger_balance(
     )
     pending_deposits = pending_result.scalars().all()
 
-    # Calculate totals (amounts stored as strings in wei)
-    available_wei = sum(int(amt) for amt in credited_deposits) if credited_deposits else 0
-    pending_wei = sum(int(amt) for amt in pending_deposits) if pending_deposits else 0
+    # Sum FINALIZED withdrawals (subtract from balance)
+    from app.models.tx_request import TxRequest, TxStatus
+    finalized_withdrawals_result = await db.execute(
+        select(TxRequest.amount)
+        .where(TxRequest.wallet_id == wallet_id)
+        .where(TxRequest.status == TxStatus.FINALIZED)
+    )
+    finalized_withdrawals = finalized_withdrawals_result.scalars().all()
+
+    # Sum pending withdrawals (CONFIRMING status - subtract from available)
+    pending_withdrawals_result = await db.execute(
+        select(TxRequest.amount)
+        .where(TxRequest.wallet_id == wallet_id)
+        .where(TxRequest.status.in_([TxStatus.CONFIRMING, TxStatus.BROADCASTED, TxStatus.BROADCAST_PENDING]))
+    )
+    pending_withdrawals = pending_withdrawals_result.scalars().all()
+
+    # Calculate totals (amounts stored as strings/Decimal in wei)
+    deposits_available_wei = sum(int(amt) for amt in credited_deposits) if credited_deposits else 0
+    deposits_pending_wei = sum(int(amt) for amt in pending_deposits) if pending_deposits else 0
+
+    # Convert Decimal to int for withdrawals
+    from decimal import Decimal as Dec
+    finalized_withdrawals_wei = sum(int(Dec(str(amt))) for amt in finalized_withdrawals) if finalized_withdrawals else 0
+    pending_withdrawals_wei = sum(int(Dec(str(amt))) for amt in pending_withdrawals) if pending_withdrawals else 0
+
+    # Available balance = deposits - finalized withdrawals - pending withdrawals
+    available_wei = deposits_available_wei - finalized_withdrawals_wei - pending_withdrawals_wei
+    pending_wei = deposits_pending_wei
 
     # Convert to ETH
     available_eth = Decimal(available_wei) / Decimal(10**18)

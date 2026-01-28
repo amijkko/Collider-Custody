@@ -226,7 +226,7 @@ export default function ClientDashboard() {
                         </div>
                       </div>
                       <div className="text-right">
-                        <p className="font-mono text-surface-200">-{tx.amount} ETH</p>
+                        <p className="font-mono text-surface-200">-{formatEth(tx.amount)} ETH</p>
                         <StatusBadge status={tx.status} />
                       </div>
                     </div>
