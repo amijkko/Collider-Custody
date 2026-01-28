@@ -293,18 +293,29 @@ async def get_signing_data(
     wallet = wallet_result.scalar_one()
 
     # Compute message hash (hash of serialized transaction)
-    # For MPC signing, we need a deterministic hash
-    value_wei = int(tx.amount) if tx.asset == "ETH" else 0
-    tx_dict = {
-        "nonce": tx.nonce or 0,
-        "to": Web3.to_checksum_address(tx.to_address),
-        "value": value_wei,
-        "gas": tx.gas_limit or 21000,
-        "chainId": 11155111,  # Sepolia
-    }
+    # For EIP-155, we need to RLP encode: [nonce, gasPrice, gas, to, value, data, chainId, 0, 0]
+    from eth_utils import to_bytes
+    import rlp
 
-    # Simple deterministic hash for signing
-    message_hash = Web3.keccak(text=str(tx_dict)).hex()
+    value_wei = int(tx.amount) if tx.asset == "ETH" else 0
+    chain_id = 11155111  # Sepolia
+
+    # Get gas price
+    from app.services.ethereum import get_ethereum_service
+    ethereum_service = get_ethereum_service()
+    gas_prices = await ethereum_service.get_gas_prices()
+
+    nonce = int(tx.nonce or 0)
+    gas_price = int(tx.gas_price or gas_prices.get("legacy_gas_price", 0))
+    gas = int(tx.gas_limit or 21000)
+    to = to_bytes(hexstr=tx.to_address)
+    value = int(value_wei)
+    data = to_bytes(hexstr=tx.data if tx.data else "0x")
+
+    # EIP-155: unsigned tx = [nonce, gasPrice, gas, to, value, data, chainId, 0, 0]
+    unsigned_tx = [nonce, gas_price, gas, to, value, data, chain_id, 0, 0]
+    unsigned_tx_bytes = rlp.encode(unsigned_tx)
+    message_hash = Web3.keccak(unsigned_tx_bytes).hex()
 
     return CorrelatedResponse(
         correlation_id=correlation_id,

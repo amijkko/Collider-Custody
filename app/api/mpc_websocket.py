@@ -365,7 +365,11 @@ async def _finalize_signing(
         # Extract R, S, V from result
         r = int.from_bytes(result.signature_r, byteorder='big')
         s = int.from_bytes(result.signature_s, byteorder='big')
-        v = result.signature_v
+
+        # For EIP-155: v = chainId * 2 + 35 + recovery_id
+        # MPC result.signature_v is the recovery ID (0 or 1)
+        chain_id = int(ethereum_service.chain_id)
+        v = chain_id * 2 + 35 + result.signature_v
 
         # Use RLP encoding for legacy transaction
         # Legacy tx structure: [nonce, gasPrice, gas, to, value, data, v, r, s]
