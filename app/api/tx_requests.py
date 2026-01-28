@@ -298,10 +298,12 @@ async def get_signing_data(
         from eth_utils import to_bytes
         import rlp
         from decimal import Decimal
+        from app.services.ethereum import EthereumService
+        from app.services.audit import AuditService
 
-        # Get gas price from service if not set
-        from app.services.ethereum import get_ethereum_service
-        ethereum_service = get_ethereum_service()
+        # Create ethereum service to get gas prices
+        audit_service = AuditService(db)
+        ethereum_service = EthereumService(db, audit_service)
         gas_prices = await ethereum_service.get_gas_price()
 
         # Convert Decimal/str to int safely
