@@ -138,18 +138,21 @@ export default function WithdrawPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!validate() || !wallet) return;
-    
+
     setIsSubmitting(true);
 
     try {
+      // Convert ETH to wei for API
+      const amountWei = (parseFloat(amount) * 1e18).toFixed(0);
+
       await txRequestsApi.create({
         wallet_id: wallet.id,
         tx_type: 'WITHDRAW',
         to_address: toAddress,
         asset: 'ETH',
-        amount: amount,
+        amount: amountWei,
       });
 
       toast.success('Withdrawal requested', 'Pending admin approval');
