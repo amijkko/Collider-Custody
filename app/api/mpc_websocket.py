@@ -341,21 +341,34 @@ async def _finalize_signing(
         ethereum_service = EthereumService(db, audit_service)
 
         # Build transaction dict to assemble signed transaction
-        value_wei = int(tx.amount) if tx.asset == "ETH" else 0
+        from decimal import Decimal
+
+        # Convert Decimal to int safely
+        if tx.asset == "ETH":
+            value_wei = int(tx.amount) if isinstance(tx.amount, int) else int(Decimal(str(tx.amount)))
+        else:
+            value_wei = 0
+
         gas_prices = await ethereum_service.get_gas_price()
+
+        # Convert gas_price from Decimal to int
+        if tx.gas_price is not None:
+            gas_price = int(tx.gas_price) if isinstance(tx.gas_price, int) else int(Decimal(str(tx.gas_price)))
+        else:
+            gas_price = int(gas_prices.get("legacy_gas_price", 20000000000))
 
         # Convert all numeric fields to int (they may be Decimal from DB)
         tx_dict = {
-            "nonce": int(tx.nonce or 0),
+            "nonce": int(tx.nonce) if tx.nonce is not None else 0,
             "to": Web3.to_checksum_address(tx.to_address),
             "value": int(value_wei),
-            "gas": int(tx.gas_limit or 21000),
+            "gas": int(tx.gas_limit) if tx.gas_limit is not None else 21000,
             "chainId": int(ethereum_service.chain_id),
         }
 
         # Use legacy transactions for now (simpler to encode with manual signature)
         # TODO: Add EIP-1559 support
-        tx_dict["gasPrice"] = int(tx.gas_price or gas_prices.get("legacy_gas_price", 0))
+        tx_dict["gasPrice"] = gas_price
 
         # Add data for contract calls
         if tx.data:

@@ -296,18 +296,33 @@ async def get_signing_data(
     # For EIP-155, we need to RLP encode: [nonce, gasPrice, gas, to, value, data, chainId, 0, 0]
     from eth_utils import to_bytes
     import rlp
+    from decimal import Decimal
 
-    value_wei = int(tx.amount) if tx.asset == "ETH" else 0
-    chain_id = 11155111  # Sepolia
-
-    # Get gas price
+    # Get gas price from service if not set
     from app.services.ethereum import get_ethereum_service
     ethereum_service = get_ethereum_service()
     gas_prices = await ethereum_service.get_gas_prices()
 
-    nonce = int(tx.nonce or 0)
-    gas_price = int(tx.gas_price or gas_prices.get("legacy_gas_price", 0))
-    gas = int(tx.gas_limit or 21000)
+    # Convert Decimal to int safely
+    if tx.asset == "ETH":
+        value_wei = int(tx.amount) if isinstance(tx.amount, int) else int(Decimal(str(tx.amount)))
+    else:
+        value_wei = 0
+
+    # Get nonce and gas parameters
+    nonce = int(tx.nonce) if tx.nonce is not None else 0
+
+    # Convert gas_price from Decimal to int
+    if tx.gas_price is not None:
+        gas_price = int(tx.gas_price) if isinstance(tx.gas_price, int) else int(Decimal(str(tx.gas_price)))
+    else:
+        gas_price = int(gas_prices.get("legacy_gas_price", 20000000000))  # 20 gwei default
+
+    gas = int(tx.gas_limit) if tx.gas_limit is not None else 21000
+
+    chain_id = 11155111  # Sepolia
+
+    # Convert to bytes
     to = to_bytes(hexstr=tx.to_address)
     value = int(value_wei)
     data = to_bytes(hexstr=tx.data if tx.data else "0x")
