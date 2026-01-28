@@ -343,9 +343,12 @@ async def _finalize_signing(
         # Build transaction dict to assemble signed transaction
         from decimal import Decimal
 
-        # Convert Decimal to int safely
+        # Convert Decimal/str to int safely
         if tx.asset == "ETH":
-            value_wei = int(tx.amount) if isinstance(tx.amount, int) else int(Decimal(str(tx.amount)))
+            try:
+                value_wei = int(tx.amount)
+            except (TypeError, ValueError):
+                value_wei = int(Decimal(str(tx.amount)))
         else:
             value_wei = 0
 
@@ -353,7 +356,10 @@ async def _finalize_signing(
 
         # Convert gas_price from Decimal to int
         if tx.gas_price is not None:
-            gas_price = int(tx.gas_price) if isinstance(tx.gas_price, int) else int(Decimal(str(tx.gas_price)))
+            try:
+                gas_price = int(tx.gas_price)
+            except (TypeError, ValueError):
+                gas_price = int(Decimal(str(tx.gas_price)))
         else:
             gas_price = int(gas_prices.get("legacy_gas_price", 20000000000))
 
