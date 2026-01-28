@@ -1,7 +1,10 @@
 """Audit API endpoints."""
-from typing import Optional
+from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, desc
+from pydantic import BaseModel
+from datetime import datetime
 
 from app.database import get_db
 from app.schemas.audit import AuditPackageResponse, AuditVerifyResponse
@@ -14,8 +17,18 @@ from app.api.deps import (
     require_roles
 )
 from app.models.user import User, UserRole
+from app.models.audit import AuditEvent, AuditEventType
 
 router = APIRouter(prefix="/v1/audit", tags=["Audit"])
+
+
+class LoginEventResponse(BaseModel):
+    """Response model for login event."""
+    timestamp: datetime
+    username: str
+    user_id: str
+    event_id: str
+    correlation_id: str
 
 
 @router.get("/packages/{tx_request_id}", response_model=CorrelatedResponse[AuditPackageResponse])
@@ -66,7 +79,7 @@ async def verify_audit_chain(
 ):
     """
     Verify integrity of the audit log hash chain.
-    
+
     Returns verification result including:
     - Whether chain is valid (no tampering detected)
     - Number of events verified
@@ -76,9 +89,50 @@ async def verify_audit_chain(
         from_sequence=from_sequence,
         to_sequence=to_sequence
     )
-    
+
     return CorrelatedResponse(
         correlation_id=correlation_id,
         data=result
+    )
+
+
+@router.get("/logins", response_model=CorrelatedResponse[List[LoginEventResponse]])
+async def get_recent_logins(
+    limit: int = Query(20, le=100, description="Maximum number of login events to return"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.ADMIN)),
+    correlation_id: str = Depends(get_correlation_id)
+):
+    """
+    Get recent user login events.
+
+    Returns list of login events with user information.
+    Requires ADMIN role.
+    """
+    # Query for USER_LOGIN events
+    stmt = (
+        select(AuditEvent, User)
+        .outerjoin(User, AuditEvent.actor_id == User.id)
+        .where(AuditEvent.event_type == AuditEventType.USER_LOGIN)
+        .order_by(desc(AuditEvent.timestamp))
+        .limit(limit)
+    )
+
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    logins = []
+    for audit_event, user in rows:
+        logins.append(LoginEventResponse(
+            timestamp=audit_event.timestamp,
+            username=user.username if user else "Unknown",
+            user_id=audit_event.actor_id or "N/A",
+            event_id=audit_event.id,
+            correlation_id=audit_event.correlation_id
+        ))
+
+    return CorrelatedResponse(
+        correlation_id=correlation_id,
+        data=logins
     )
 
